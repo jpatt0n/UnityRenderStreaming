@@ -18,6 +18,9 @@ export class PointerCorrector {
    * @returns {Number[]}
    */
    map(position) {
+    if (!this._isReady) {
+      return position;
+    }
     var rect = this._videoElem.getBoundingClientRect();
     const _position = new Array(2);
 
@@ -119,6 +122,24 @@ export class PointerCorrector {
   }
 
   _reset() {
+    if (!this._videoElem) {
+      this._contentRect = {x: 0, y: 0, width: 0, height: 0};
+      this._isReady = false;
+      return;
+    }
+
+    const rect = this._videoElem.getBoundingClientRect();
+    if (!(this._videoWidth > 0 && this._videoHeight > 0 && rect.width > 0 && rect.height > 0)) {
+      this._contentRect = {x: 0, y: 0, width: 0, height: 0};
+      this._isReady = false;
+      return;
+    }
+
     this._contentRect = this.contentRect;
+    this._isReady = this._contentRect.width > 0 && this._contentRect.height > 0;
+  }
+
+  get isReady() {
+    return this._isReady;
   }
 }

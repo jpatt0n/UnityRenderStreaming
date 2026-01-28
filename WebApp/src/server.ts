@@ -11,6 +11,9 @@ const cors = require('cors');
 
 export const createServer = (config: Options): express.Application => {
   const app: express.Application = express();
+  const basePath = '/rs';
+  const publicDir = path.join(__dirname, '../client/public');
+  const moduleDir = path.join(__dirname, '../client/src');
   resetHandler(config.mode);
   // logging http access
   if (config.logging != "none") {
@@ -20,12 +23,8 @@ export const createServer = (config: Options): express.Application => {
   app.use(cors({origin: '*'}));
   app.use(express.urlencoded({ extended: true }));
   app.use(express.json());
-  app.get('/config', (req, res) => res.json({ useWebSocket: config.type == 'websocket', startupMode: config.mode, logging: config.logging }));
-  app.use('/signaling', signaling);
-  app.use(express.static(path.join(__dirname, '../client/public')));
-  app.use('/module', express.static(path.join(__dirname, '../client/src')));
-  app.get('/', (req, res) => {
-    const indexPagePath: string = path.join(__dirname, '../client/public/index.html');
+  const sendIndex = (res: express.Response): void => {
+    const indexPagePath: string = path.join(publicDir, 'index.html');
     fs.access(indexPagePath, (err) => {
       if (err) {
         log(LogLevel.warn, `Can't find file ' ${indexPagePath}`);
@@ -34,6 +33,27 @@ export const createServer = (config: Options): express.Application => {
         res.sendFile(indexPagePath);
       }
     });
-  });
+  };
+
+  app.get('/config', (req, res) => res.json({ useWebSocket: config.type == 'websocket', startupMode: config.mode, logging: config.logging }));
+  app.get(`${basePath}/config`, (req, res) => res.json({ useWebSocket: config.type == 'websocket', startupMode: config.mode, logging: config.logging }));
+
+  app.use('/signaling', signaling);
+  app.use(`${basePath}/signaling`, signaling);
+
+  app.use(basePath, express.static(publicDir));
+  app.use(`${basePath}/module`, express.static(moduleDir));
+
+  app.get('/', (req, res) => res.redirect(`${basePath}/index.html`));
+  app.get('/receiver', (req, res) => res.redirect(`${basePath}/index.html`));
+  app.get('/receiver/', (req, res) => res.redirect(`${basePath}/index.html`));
+  app.get('/multiplay', (req, res) => res.redirect(`${basePath}/index.html`));
+  app.get('/multiplay/', (req, res) => res.redirect(`${basePath}/index.html`));
+  app.get('/bidirectional', (req, res) => res.redirect(`${basePath}/index.html`));
+  app.get('/bidirectional/', (req, res) => res.redirect(`${basePath}/index.html`));
+  app.get('/videoplayer', (req, res) => res.redirect(`${basePath}/index.html`));
+  app.get('/videoplayer/', (req, res) => res.redirect(`${basePath}/index.html`));
+  app.get(`${basePath}/`, (req, res) => sendIndex(res));
+  app.get(basePath, (req, res) => res.redirect(`${basePath}/`));
   return app;
 };

@@ -1,77 +1,51 @@
+<!DOCTYPE HTML>
+<html>
 <head>
   <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
   <link rel="icon" href="images/favicon.ico" type="image/x-icon">
   <link rel="stylesheet" href="css/main.css" />
-  <title>Unity Render Streaming Samples</title>
+  <link rel="stylesheet" href="receiver/css/style.css" />
+  <title>Lawgiven</title>
 </head>
 
 <body>
   <div id="container">
-    <h1>Unity Render Streaming Samples</h1>
+    <h1>Lawgiven</h1>
 
-    <section>
-      <p>These are WebClient samples for use with <a href="https://docs.unity3d.com/Packages/com.unity.renderstreaming@latest/index.html">Unity Render
-          Streaming</a>.</p>
-    </section>
+    <div id="warning" hidden="true"></div>
 
-    <section>
-      <h2>Server Configuration</h2>
-      <div id="startup"></div>
-    </section>
+    <div id="player"></div>
 
-    <section id="iceServers">
-      <h2>ICE servers</h2>
-      <select id="servers" size="4">
+    <div class="box">
+      <span>Codec preferences:</span>
+      <select id="codecPreferences" autocomplete="off" disabled>
+        <option selected value="">Default</option>
       </select>
-      <div>
-          <label for="url">STUN or TURN URI:</label>
-          <input id="url">
-      </div>
-      <div>
-          <label for="username">TURN username:</label>
-          <input id="username">
-      </div>
-      <div>
-          <label for="password">TURN password:</label>
-          <input id="password">
-      </div>
-      <div>
-          <button id="add">Add Server</button>
-          <button id="remove">Remove Server</button>
-          <button id="reset">Reset to defaults</button>
-      </div>
-  </section>
+    </div>
 
-    <section>
-      <h2 id="receiver"><a href="receiver/index.html">Receiver Sample</a></h2>
-      <p>This is a sample for receiving video / audio from Unity.</p>
-      <p>It can be used in combination with the <code>Broadcast</code> scene of Unity Render Streaming.</p>
-    </section>
+    <div class="box">
+      <span>Lock Cursor to Player:</span>
+      <input type="checkbox" id="lockMouseCheck" autocomplete="off" />
+    </div>
 
-    <section>
-      <h2 id="bidirectional"><a href="bidirectional/index.html">Bidirectional Sample</a></h2>
-      <p>This is a sample for sending and receiving video in both directions.</p>
-      <p>It can be used in combination with the <code>Bidirectional</code> scene of Unity Render Streaming.</p>
-      <p>The WebApp must be running in Private mode.</p>
-    </section>
+    <div class="box">
+      <span>Username:</span>
+      <input id="usernameInput" autocomplete="off" placeholder="guest" />
+    </div>
 
-    <section>
-      <h2 id="multiplay"><a href="multiplay/index.html">Multiplay Sample</a></h2>
-      <p>This sample connects as a Guest in the <code>Multiplay</code> scene of Unity Render Streaming.</p>
-    </section>
+    <div class="box">
+      <span>Send Mic:</span>
+      <input type="checkbox" id="micCheck" autocomplete="off" />
+      <span class="inline-label">Mic Device:</span>
+      <select id="audioSource" autocomplete="off"></select>
+    </div>
 
-    <section>
-      <h2 id="videoplayer"><a href="videoplayer/index.html">VideoPlayer Sample</a></h2>
-      <p>This is a sample to receive the camera image rendered on Unity. You can operate the camera in Unity from the
-        browser.</p>
-      <p>It can be used in combination with the <code>WebBrowserInput</code> scene of Unity Render Streaming.</p>
-      <p>The WebApp must be running in Public mode.</p>
-    </section>
-
-    <section>
-      <a href="https://github.com/Unity-Technologies/UnityRenderStreaming/tree/develop/WebApp" title="View source for this page on GitHub" id="viewSource">View source on GitHub</a>
-    </section>
+    <div id="message"></div>
   </div>
 
-  <script type="module" src="js/main.js"></script>
+  <script type="text/javascript" src="https://webrtc.github.io/adapter/adapter-latest.js"></script>
+  <script src="https://unpkg.com/event-target@latest/min.js"></script>
+  <script src="https://unpkg.com/resize-observer-polyfill@1.5.0/dist/ResizeObserver.global.js"></script>
+  <script type="module" src="receiver/js/main.js"></script>
 </body>
+</html>

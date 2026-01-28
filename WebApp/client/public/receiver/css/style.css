@@ -41,3 +41,17 @@ body {
   width: 32px;
   height: 32px;
 }
+
+#usernameInput {
+  margin-left: 8px;
+  width: 200px;
+}
+
+#audioSource {
+  margin-left: 8px;
+  max-width: 260px;
+}
+
+.inline-label {
+  margin-left: 12px;
+}

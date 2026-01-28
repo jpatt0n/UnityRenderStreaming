@@ -55,6 +55,7 @@ namespace Unity.RenderStreaming.InputSystem
         {
             RemoveAllRemoteDevices();
             RemoveAllRemoteLayouts();
+            GC.SuppressFinalize(this);
         }
 
         private void OnMessage(byte[] bytes)

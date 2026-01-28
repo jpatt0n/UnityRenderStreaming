@@ -16,6 +16,8 @@ export class Sender extends LocalInputManager {
     super();
     this._devices = [];
     this._elem = elem;
+    this._loggedMouseEvent = false;
+    this._loggedKeyEvent = false;
     this._corrector = new PointerCorrector(
       this._elem.videoWidth,
       this._elem.videoHeight,
@@ -119,6 +121,12 @@ export class Sender extends LocalInputManager {
     );
   }
   _onMouseEvent(event) {
+    if (!this._corrector.isReady) {
+      return;
+    }
+    if (!this._loggedMouseEvent) {
+      this._loggedMouseEvent = true;
+    }
     this.mouse.queueEvent(event);
     this.mouse.currentState.position = this._corrector.map(this.mouse.currentState.position);
     this._queueStateEvent(this.mouse.currentState, this.mouse);
@@ -132,6 +140,9 @@ export class Sender extends LocalInputManager {
       if(!event.repeat) { // StateEvent
         this.keyboard.queueEvent(event);
         this._queueStateEvent(this.keyboard.currentState, this.keyboard);
+        if (!this._loggedKeyEvent) {
+          this._loggedKeyEvent = true;
+        }
       }
       // TextEvent
       this._queueTextEvent(this.keyboard, event);
@@ -142,6 +153,9 @@ export class Sender extends LocalInputManager {
     }
   }
   _onTouchEvent(event) {
+    if (!this._corrector.isReady) {
+      return;
+    }
     this.touchscreen.queueEvent(event, this.timeSinceStartup);
     for(let touch of this.touchscreen.currentState.touchData) {
       let clone = touch.copy();

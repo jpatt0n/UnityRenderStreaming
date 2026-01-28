@@ -15,7 +15,7 @@ namespace Unity.RenderStreaming.Editor
         [InitializeOnLoadMethod]
         static void OnLoad()
         {
-            if (null != GraphicsSettings.renderPipelineAsset)
+            if (null != GraphicsSettings.defaultRenderPipeline)
             {
                 return;
             }
@@ -28,7 +28,7 @@ namespace Unity.RenderStreaming.Editor
                 {
                     HDRenderPipelineAsset pipelineAsset =
                         AssetDatabase.LoadAssetAtPath<HDRenderPipelineAsset>(curAssetPath);
-                    GraphicsSettings.renderPipelineAsset = pipelineAsset;
+                    GraphicsSettings.defaultRenderPipeline = pipelineAsset;
                     PlayerSettings.colorSpace = ColorSpace.Linear;
                 }
             }

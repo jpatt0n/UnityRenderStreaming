@@ -108,6 +108,9 @@ export class InputRemoting {
   _sendInitialMessages() {
    this._sendAllGeneratedLayouts();
    this._sendAllDevices();
+   if (!this._loggedInit) {
+     this._loggedInit = true;
+   }
   }
 
   _sendAllGeneratedLayouts() {
@@ -137,6 +140,9 @@ export class InputRemoting {
 
   _sendEvent(event) {
     const message = NewEventsMsg.create(event);
+    if (!this._loggedFirstEvent) {
+      this._loggedFirstEvent = true;
+    }
     this._send(message);
   }
 

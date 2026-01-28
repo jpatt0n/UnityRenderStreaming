@@ -19,6 +19,9 @@ messageDiv.style.display = 'none';
 
 const playerDiv = document.getElementById('player');
 const lockMouseCheck = document.getElementById('lockMouseCheck');
+const usernameInput = document.getElementById('usernameInput');
+const micCheck = document.getElementById('micCheck');
+const audioSelect = document.querySelector('select#audioSource');
 const videoPlayer = new VideoPlayer();
 
 setup();
@@ -42,6 +45,8 @@ async function setup() {
   useWebSocket = res.useWebSocket;
   showWarningIfNeeded(res.startupMode);
   showCodecSelect();
+  await setupAudioInputSelect();
+  restoreUsername();
   showPlayButton();
 }
 
@@ -57,7 +62,8 @@ function showPlayButton() {
   if (!document.getElementById('playButton')) {
     const elementPlayButton = document.createElement('img');
     elementPlayButton.id = 'playButton';
-    elementPlayButton.src = '../../images/Play.png';
+    const basePath = window.location.pathname.startsWith('/rs') ? '/rs' : '';
+    elementPlayButton.src = `${basePath}/images/Play.png`;
     elementPlayButton.alt = 'Start Streaming';
     playButton = document.getElementById('player').appendChild(elementPlayButton);
     playButton.addEventListener('click', onClickPlayButton);
@@ -65,6 +71,14 @@ function showPlayButton() {
 }
 
 function onClickPlayButton() {
+  const username = sanitizeUsername(usernameInput.value);
+  if (!username) {
+    messageDiv.style.display = 'block';
+    messageDiv.innerText = 'Please enter a username to connect.';
+    return;
+  }
+  usernameInput.value = username;
+  saveUsername(username);
   playButton.style.display = 'none';
 
   // add video player
@@ -84,12 +98,17 @@ async function setupRenderStreaming() {
   renderstreaming.onGotOffer = setCodecPreferences;
 
   await renderstreaming.start();
-  await renderstreaming.createConnection();
+  const username = sanitizeUsername(usernameInput.value);
+  const connectionId = createConnectionId(username);
+  await renderstreaming.createConnection(connectionId);
 }
 
-function onConnect() {
+async function onConnect() {
   const channel = renderstreaming.createDataChannel("input");
   videoPlayer.setupInput(channel);
+  if (micCheck && micCheck.checked) {
+    await startMicrophone();
+  }
   showStatsMessage();
 }
 
@@ -101,6 +120,7 @@ async function onDisconnect(connectionId) {
   await renderstreaming.stop();
   renderstreaming = null;
   videoPlayer.deletePlayer();
+  stopMicrophone();
   if (supportsSetCodecPreferences) {
     codecPreferences.disabled = false;
   }
@@ -148,6 +168,122 @@ function showCodecSelect() {
     codecPreferences.appendChild(option);
   });
   codecPreferences.disabled = false;
+}
+
+async function setupAudioInputSelect() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+    return;
+  }
+  if (!audioSelect) {
+    return;
+  }
+
+  const deviceInfos = await navigator.mediaDevices.enumerateDevices();
+  audioSelect.innerHTML = '';
+
+  for (let i = 0; i !== deviceInfos.length; ++i) {
+    const deviceInfo = deviceInfos[i];
+    if (deviceInfo.kind === 'audioinput') {
+      const option = document.createElement('option');
+      option.value = deviceInfo.deviceId;
+      option.text = deviceInfo.label || `mic ${audioSelect.length + 1}`;
+      audioSelect.appendChild(option);
+    }
+  }
+}
+
+let localAudioStream = null;
+let localAudioTrack = null;
+
+async function startMicrophone() {
+  if (!renderstreaming) {
+    return;
+  }
+
+  if (localAudioTrack && localAudioTrack.readyState === 'live') {
+    localAudioTrack.enabled = true;
+    return;
+  }
+
+  const constraints = {
+    audio: {
+      deviceId: audioSelect && audioSelect.value ? { exact: audioSelect.value } : undefined
+    }
+  };
+
+  try {
+    localAudioStream = await navigator.mediaDevices.getUserMedia(constraints);
+  } catch (err) {
+    messageDiv.style.display = 'block';
+    messageDiv.innerText = `Microphone error: ${err.message || err}`;
+    micCheck.checked = false;
+    return;
+  }
+
+  localAudioTrack = localAudioStream.getAudioTracks()[0];
+  if (!localAudioTrack) {
+    return;
+  }
+
+  renderstreaming.addTransceiver(localAudioTrack, { direction: 'sendonly' });
+}
+
+function stopMicrophone() {
+  if (localAudioTrack) {
+    localAudioTrack.stop();
+    localAudioTrack = null;
+  }
+  localAudioStream = null;
+}
+
+if (micCheck) {
+  micCheck.addEventListener('change', async () => {
+    if (micCheck.checked) {
+      await startMicrophone();
+    } else if (localAudioTrack) {
+      localAudioTrack.enabled = false;
+    }
+  });
+}
+
+if (audioSelect) {
+  audioSelect.addEventListener('change', async () => {
+    if (micCheck && micCheck.checked) {
+      stopMicrophone();
+      await startMicrophone();
+    }
+  });
+}
+
+if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+  navigator.mediaDevices.addEventListener('devicechange', setupAudioInputSelect);
+}
+
+function createConnectionId(username) {
+  const base = username || 'guest';
+  if (window.crypto && window.crypto.randomUUID) {
+    return `${base}_${window.crypto.randomUUID()}`;
+  }
+  const rand = Math.random().toString(36).slice(2);
+  return `${base}_${rand}`;
+}
+
+function sanitizeUsername(value) {
+  return (value || '').trim().toLowerCase().replace(/[^a-z]/g, '');
+}
+
+function restoreUsername() {
+  const saved = window.localStorage.getItem('lg_username') || '';
+  if (saved) {
+    usernameInput.value = sanitizeUsername(saved);
+  }
+  usernameInput.addEventListener('input', () => {
+    usernameInput.value = sanitizeUsername(usernameInput.value);
+  });
+}
+
+function saveUsername(value) {
+  window.localStorage.setItem('lg_username', value);
 }
 
 /** @type {RTCStatsReport} */

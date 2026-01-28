@@ -23,6 +23,7 @@ export class VideoPlayer {
     this.videoElement = document.createElement('video');
     this.videoElement.id = 'Video';
     this.videoElement.style.touchAction = 'none';
+    this.videoElement.tabIndex = 0;
     this.videoElement.playsInline = true;
     this.videoElement.srcObject = new MediaStream();
     this.videoElement.addEventListener('loadedmetadata', this._onLoadedVideo.bind(this), true);
@@ -31,18 +32,29 @@ export class VideoPlayer {
     // add fullscreen button
     this.fullScreenButtonElement = document.createElement('img');
     this.fullScreenButtonElement.id = 'fullscreenButton';
-    this.fullScreenButtonElement.src = '../images/FullScreen.png';
+    const basePath = window.location.pathname.startsWith('/rs') ? '/rs' : '';
+    this.fullScreenButtonElement.src = `${basePath}/images/FullScreen.png`;
     this.fullScreenButtonElement.addEventListener("click", this._onClickFullscreenButton.bind(this));
     this.playerElement.appendChild(this.fullScreenButtonElement);
 
     document.addEventListener('webkitfullscreenchange', this._onFullscreenChange.bind(this));
     document.addEventListener('fullscreenchange', this._onFullscreenChange.bind(this));
     this.videoElement.addEventListener("click", this._mouseClick.bind(this), false);
+    this.videoElement.addEventListener("click", () => this.videoElement.focus(), false);
+
+    window.addEventListener('keydown', (e) => {
+      if (document.pointerLockElement === this.videoElement || document.activeElement === this.videoElement) {
+        e.preventDefault();
+      }
+    }, { passive: false });
   }
 
   _onLoadedVideo() {
     this.videoElement.play();
     this.resizeVideo();
+    if (this.sender && this.sender._onResizeEvent) {
+      this.sender._onResizeEvent();
+    }
   }
 
   _onClickFullscreenButton() {
@@ -202,8 +214,16 @@ export class VideoPlayer {
     this.inputRemoting = new InputRemoting(this.sender);
 
     this.inputSenderChannel = channel;
-    this.inputSenderChannel.onopen = this._onOpenInputSenderChannel.bind(this);
+    this.inputSenderChannel.binaryType = 'arraybuffer';
+    if (this.inputSenderChannel.addEventListener) {
+      this.inputSenderChannel.addEventListener('open', this._onOpenInputSenderChannel.bind(this));
+    } else {
+      this.inputSenderChannel.onopen = this._onOpenInputSenderChannel.bind(this);
+    }
     this.inputRemoting.subscribe(new Observer(this.inputSenderChannel));
+    if (this.inputSenderChannel.readyState === 'open') {
+      this._onOpenInputSenderChannel();
+    }
   }
 
   async _onOpenInputSenderChannel() {
