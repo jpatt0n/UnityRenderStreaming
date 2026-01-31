@@ -47,12 +47,6 @@ export const createServer = (config: Options): express.Application => {
   app.get('/', (req, res) => res.redirect(`${basePath}/index.html`));
   app.get('/receiver', (req, res) => res.redirect(`${basePath}/index.html`));
   app.get('/receiver/', (req, res) => res.redirect(`${basePath}/index.html`));
-  app.get('/multiplay', (req, res) => res.redirect(`${basePath}/index.html`));
-  app.get('/multiplay/', (req, res) => res.redirect(`${basePath}/index.html`));
-  app.get('/bidirectional', (req, res) => res.redirect(`${basePath}/index.html`));
-  app.get('/bidirectional/', (req, res) => res.redirect(`${basePath}/index.html`));
-  app.get('/videoplayer', (req, res) => res.redirect(`${basePath}/index.html`));
-  app.get('/videoplayer/', (req, res) => res.redirect(`${basePath}/index.html`));
   app.get(`${basePath}/`, (req, res) => sendIndex(res));
   app.get(basePath, (req, res) => res.redirect(`${basePath}/`));
   return app;
