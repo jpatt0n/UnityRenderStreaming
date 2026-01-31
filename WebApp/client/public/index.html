@@ -8,39 +8,66 @@
   <title>Lawgiven</title>
 </head>
 
-<body>
+<body class="rs-app" data-state="ready">
   <div id="container">
-    <h1>Lawgiven</h1>
-
     <div id="warning" hidden="true"></div>
 
-    <div id="player"></div>
+    <div id="player">
+      <div id="overlay">
+        <div id="settingsPanel" class="panel">
+          <div class="panel-header">
+            <div class="panel-title">Join Session</div>
+            <button id="settingsToggle" class="icon-button" type="button" aria-expanded="false" aria-controls="settingsMenu" title="Settings">
+              <svg height="512" viewBox="0 0 32 32" width="512" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
+                <g>
+                  <path d="m29.21 11.84a3.92 3.92 0 0 1 -3.09-5.3 1.84 1.84 0 0 0 -.55-2.07 14.75 14.75 0 0 0 -4.4-2.55 1.85 1.85 0 0 0 -2.09.58 3.91 3.91 0 0 1 -6.16 0 1.85 1.85 0 0 0 -2.09-.58 14.82 14.82 0 0 0 -4.1 2.3 1.86 1.86 0 0 0 -.58 2.13 3.9 3.9 0 0 1 -3.25 5.36 1.85 1.85 0 0 0 -1.62 1.49 14.14 14.14 0 0 0 -.28 2.8 14.32 14.32 0 0 0 .19 2.35 1.85 1.85 0 0 0 1.63 1.55 3.9 3.9 0 0 1 3.18 5.51 1.82 1.82 0 0 0 .51 2.18 14.86 14.86 0 0 0 4.36 2.51 2 2 0 0 0 .63.11 1.84 1.84 0 0 0 1.5-.78 3.87 3.87 0 0 1 3.2-1.68 3.92 3.92 0 0 1 3.14 1.58 1.84 1.84 0 0 0 2.16.61 15 15 0 0 0 4-2.39 1.85 1.85 0 0 0 .54-2.11 3.9 3.9 0 0 1 3.13-5.39 1.85 1.85 0 0 0 1.57-1.52 14.5 14.5 0 0 0 .26-2.53 14.35 14.35 0 0 0 -.25-2.67 1.83 1.83 0 0 0 -1.54-1.49zm-8.21 4.16a5 5 0 1 1 -5-5 5 5 0 0 1 5 5z"></path>
+                </g>
+              </svg>
+            </button>
+          </div>
 
-    <div class="box">
-      <span>Codec preferences:</span>
-      <select id="codecPreferences" autocomplete="off" disabled>
-        <option selected value="">Default</option>
-      </select>
+          <div class="field">
+            <label for="usernameInput">Username</label>
+            <input id="usernameInput" autocomplete="off" placeholder="guest" />
+          </div>
+
+          <div class="field">
+            <label>Microphone</label>
+            <div class="mic-row">
+              <label class="toggle">
+                <input type="checkbox" id="micCheck" autocomplete="off" checked />
+                <span id="micStateLabel">Enabled</span>
+              </label>
+              <select id="audioSource" autocomplete="off"></select>
+            </div>
+          </div>
+
+          <button id="joinButton" type="button">Join</button>
+
+          <div id="settingsMenu" class="settings-menu" hidden>
+            <div class="field compact">
+              <label for="codecPreferences">Codec preferences</label>
+              <select id="codecPreferences" autocomplete="off" disabled>
+                <option selected value="">Default</option>
+              </select>
+            </div>
+            <label class="checkbox-row">
+              <input type="checkbox" id="lockMouseCheck" autocomplete="off" />
+              <span>Lock cursor to player</span>
+            </label>
+          </div>
+        </div>
+
+        <div id="statusMessage" class="status toast" aria-live="polite" hidden></div>
+
+        <button id="statsToggle" class="ghost-button" type="button" aria-expanded="false" hidden>Stats</button>
+        <div id="statsPanel" class="stats-panel" hidden>
+          <div id="message"></div>
+        </div>
+
+        <button id="disconnectButton" class="ghost-button disconnect" type="button" hidden>Disconnect</button>
+      </div>
     </div>
-
-    <div class="box">
-      <span>Lock Cursor to Player:</span>
-      <input type="checkbox" id="lockMouseCheck" autocomplete="off" />
-    </div>
-
-    <div class="box">
-      <span>Username:</span>
-      <input id="usernameInput" autocomplete="off" placeholder="guest" />
-    </div>
-
-    <div class="box">
-      <span>Send Mic:</span>
-      <input type="checkbox" id="micCheck" autocomplete="off" />
-      <span class="inline-label">Mic Device:</span>
-      <select id="audioSource" autocomplete="off"></select>
-    </div>
-
-    <div id="message"></div>
   </div>
 
   <script type="text/javascript" src="https://webrtc.github.io/adapter/adapter-latest.js"></script>

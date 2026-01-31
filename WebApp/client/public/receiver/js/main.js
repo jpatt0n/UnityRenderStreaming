@@ -4,23 +4,27 @@ import { VideoPlayer } from "../../js/videoplayer.js";
 import { RenderStreaming } from "../../module/renderstreaming.js";
 import { Signaling, WebSocketSignaling } from "../../module/signaling.js";
 
-/** @type {Element} */
-let playButton;
 /** @type {RenderStreaming} */
 let renderstreaming;
 /** @type {boolean} */
 let useWebSocket;
-
-function getBasePath() {
-  const globalConfig = window.RENDER_STREAMING_CONFIG || {};
-  return globalConfig.basePath || (window.location.pathname.startsWith('/rs') ? '/rs' : '');
-}
+/** @type {boolean} */
+let isTearingDown = false;
 
 const codecPreferences = document.getElementById('codecPreferences');
 const supportsSetCodecPreferences = window.RTCRtpTransceiver &&
   'setCodecPreferences' in window.RTCRtpTransceiver.prototype;
-const messageDiv = document.getElementById('message');
-messageDiv.style.display = 'none';
+
+const statusDiv = document.getElementById('statusMessage');
+const statsDiv = document.getElementById('message');
+const statsPanel = document.getElementById('statsPanel');
+const statsToggle = document.getElementById('statsToggle');
+const settingsToggle = document.getElementById('settingsToggle');
+const settingsMenu = document.getElementById('settingsMenu');
+const settingsPanel = document.getElementById('settingsPanel');
+const joinButton = document.getElementById('joinButton');
+const disconnectButton = document.getElementById('disconnectButton');
+const micStateLabel = document.getElementById('micStateLabel');
 
 const playerDiv = document.getElementById('player');
 const lockMouseCheck = document.getElementById('lockMouseCheck');
@@ -40,19 +44,92 @@ window.addEventListener('resize', function () {
 }, true);
 
 window.addEventListener('beforeunload', async () => {
-  if(!renderstreaming)
+  if (!renderstreaming)
     return;
   await renderstreaming.stop();
 }, true);
 
+if (joinButton) {
+  joinButton.addEventListener('click', onClickJoinButton);
+}
+
+if (disconnectButton) {
+  disconnectButton.addEventListener('click', onClickDisconnectButton);
+}
+
+if (settingsToggle && settingsMenu) {
+  settingsToggle.addEventListener('click', () => {
+    const isOpen = !settingsMenu.hidden;
+    settingsMenu.hidden = isOpen;
+    settingsToggle.setAttribute('aria-expanded', (!isOpen).toString());
+  });
+}
+
+if (statsToggle && statsPanel) {
+  statsToggle.addEventListener('click', () => {
+    const isOpen = !statsPanel.hidden;
+    statsPanel.hidden = isOpen;
+    statsToggle.setAttribute('aria-expanded', (!isOpen).toString());
+    statsToggle.classList.toggle('is-active', !isOpen);
+  });
+}
+
 async function setup() {
+  setUiState('ready');
   const res = await getServerConfig();
   useWebSocket = res.useWebSocket;
   showWarningIfNeeded(res.startupMode);
   showCodecSelect();
   await setupAudioInputSelect();
   restoreUsername();
-  showPlayButton();
+  updateMicState();
+  if (settingsMenu) {
+    settingsMenu.hidden = true;
+    if (settingsToggle) {
+      settingsToggle.setAttribute('aria-expanded', 'false');
+    }
+  }
+}
+
+function setUiState(state) {
+  document.body.dataset.state = state;
+  const isConnected = state === 'connected';
+  const showSettings = state === 'ready' || state === 'disconnected';
+
+  if (settingsPanel) {
+    settingsPanel.style.display = showSettings ? 'block' : 'none';
+  }
+
+  if (statsToggle) {
+    statsToggle.hidden = !isConnected;
+  }
+
+  if (disconnectButton) {
+    disconnectButton.hidden = !isConnected;
+  }
+
+  if (!isConnected && statsPanel && statsToggle) {
+    statsPanel.hidden = true;
+    statsToggle.classList.remove('is-active');
+    statsToggle.setAttribute('aria-expanded', 'false');
+  }
+}
+
+function setStatusMessage(message, isHtml = false) {
+  if (!statusDiv) {
+    return;
+  }
+  if (!message) {
+    statusDiv.hidden = true;
+    statusDiv.textContent = '';
+    return;
+  }
+  statusDiv.hidden = false;
+  if (isHtml) {
+    statusDiv.innerHTML = message;
+  } else {
+    statusDiv.textContent = message;
+  }
 }
 
 function showWarningIfNeeded(startupMode) {
@@ -63,32 +140,30 @@ function showWarningIfNeeded(startupMode) {
   }
 }
 
-function showPlayButton() {
-  if (!document.getElementById('playButton')) {
-    const elementPlayButton = document.createElement('img');
-    elementPlayButton.id = 'playButton';
-    const basePath = getBasePath();
-    elementPlayButton.src = `${basePath}/images/Play.png`;
-    elementPlayButton.alt = 'Start Streaming';
-    playButton = document.getElementById('player').appendChild(elementPlayButton);
-    playButton.addEventListener('click', onClickPlayButton);
-  }
-}
-
-function onClickPlayButton() {
+function onClickJoinButton() {
   const username = sanitizeUsername(usernameInput.value);
   if (!username) {
-    messageDiv.style.display = 'block';
-    messageDiv.innerText = 'Please enter a username to connect.';
+    setStatusMessage('Please enter a username to connect.');
     return;
   }
   usernameInput.value = username;
   saveUsername(username);
-  playButton.style.display = 'none';
+  setStatusMessage('');
 
-  // add video player
+  setUiState('connecting');
+  if (settingsMenu) {
+    settingsMenu.hidden = true;
+    if (settingsToggle) {
+      settingsToggle.setAttribute('aria-expanded', 'false');
+    }
+  }
+
   videoPlayer.createPlayer(playerDiv, lockMouseCheck);
   setupRenderStreaming();
+}
+
+async function onClickDisconnectButton() {
+  await teardownConnection('Disconnected.');
 }
 
 async function setupRenderStreaming() {
@@ -114,22 +189,37 @@ async function onConnect() {
   if (micCheck && micCheck.checked) {
     await startMicrophone();
   }
+  setStatusMessage('');
+  setUiState('connected');
   showStatsMessage();
 }
 
 async function onDisconnect(connectionId) {
-  clearStatsMessage();
-  messageDiv.style.display = 'block';
-  messageDiv.innerText = `Disconnect peer on ${connectionId}.`;
+  const display = typeof connectionId === 'string' ? connectionId : 'session';
+  const message = display.startsWith('Receive disconnect message') ? 'Disconnected.' : `Disconnected from ${display}.`;
+  await teardownConnection(message);
+}
 
-  await renderstreaming.stop();
-  renderstreaming = null;
+async function teardownConnection(message) {
+  if (isTearingDown) {
+    return;
+  }
+  isTearingDown = true;
+  clearStatsMessage();
+  setStatusMessage(message || '');
+
+  if (renderstreaming) {
+    await renderstreaming.stop();
+    renderstreaming = null;
+  }
+
   videoPlayer.deletePlayer();
   stopMicrophone();
   if (supportsSetCodecPreferences) {
     codecPreferences.disabled = false;
   }
-  showPlayButton();
+  setUiState('ready');
+  isTearingDown = false;
 }
 
 function setCodecPreferences() {
@@ -157,8 +247,7 @@ function setCodecPreferences() {
 
 function showCodecSelect() {
   if (!supportsSetCodecPreferences) {
-    messageDiv.style.display = 'block';
-    messageDiv.innerHTML = `Current Browser does not support <a href="https://developer.mozilla.org/en-US/docs/Web/API/RTCRtpTransceiver/setCodecPreferences">RTCRtpTransceiver.setCodecPreferences</a>.`;
+    setStatusMessage('Current Browser does not support <a href="https://developer.mozilla.org/en-US/docs/Web/API/RTCRtpTransceiver/setCodecPreferences">RTCRtpTransceiver.setCodecPreferences</a>.', true);
     return;
   }
 
@@ -219,9 +308,9 @@ async function startMicrophone() {
   try {
     localAudioStream = await navigator.mediaDevices.getUserMedia(constraints);
   } catch (err) {
-    messageDiv.style.display = 'block';
-    messageDiv.innerText = `Microphone error: ${err.message || err}`;
+    setStatusMessage(`Microphone error: ${err.message || err}`);
     micCheck.checked = false;
+    updateMicState();
     return;
   }
 
@@ -241,8 +330,18 @@ function stopMicrophone() {
   localAudioStream = null;
 }
 
+function updateMicState() {
+  if (micStateLabel && micCheck) {
+    micStateLabel.textContent = micCheck.checked ? 'Enabled' : 'Disabled';
+  }
+  if (audioSelect) {
+    audioSelect.disabled = !micCheck.checked;
+  }
+}
+
 if (micCheck) {
   micCheck.addEventListener('change', async () => {
+    updateMicState();
     if (micCheck.checked) {
       await startMicrophone();
     } else if (localAudioTrack) {
@@ -308,9 +407,8 @@ function showStatsMessage() {
     }
 
     const array = createDisplayStringArray(stats, lastStats);
-    if (array.length) {
-      messageDiv.style.display = 'block';
-      messageDiv.innerHTML = array.join('<br>');
+    if (array.length && statsDiv) {
+      statsDiv.innerHTML = array.join('<br>');
     }
     lastStats = stats;
   }, 1000);
@@ -322,6 +420,14 @@ function clearStatsMessage() {
   }
   lastStats = null;
   intervalId = null;
-  messageDiv.style.display = 'none';
-  messageDiv.innerHTML = '';
+  if (statsDiv) {
+    statsDiv.innerHTML = '';
+  }
+  if (statsPanel) {
+    statsPanel.hidden = true;
+  }
+  if (statsToggle) {
+    statsToggle.classList.remove('is-active');
+    statsToggle.setAttribute('aria-expanded', 'false');
+  }
 }
