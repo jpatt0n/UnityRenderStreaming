@@ -1,7 +1,10 @@
 import {getServers} from "./icesettings.js";
 
+const globalConfig = window.RENDER_STREAMING_CONFIG || {};
+const signalingBaseUrl = (globalConfig.signalingBaseUrl || location.origin).replace(/\/$/, '');
+
 export async function getServerConfig() {
-  const protocolEndPoint = location.origin + '/config';
+  const protocolEndPoint = signalingBaseUrl + '/config';
   const createResponse = await fetch(protocolEndPoint);
   return await createResponse.json();
 }

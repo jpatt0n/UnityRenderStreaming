@@ -1,6 +1,11 @@
 import { Observer, Sender } from "../module/sender.js";
 import { InputRemoting } from "../module/inputremoting.js";
 
+function getBasePath() {
+  const globalConfig = window.RENDER_STREAMING_CONFIG || {};
+  return globalConfig.basePath || (window.location.pathname.startsWith('/rs') ? '/rs' : '');
+}
+
 export class VideoPlayer {
   constructor() {
     this.playerElement = null;
@@ -32,7 +37,7 @@ export class VideoPlayer {
     // add fullscreen button
     this.fullScreenButtonElement = document.createElement('img');
     this.fullScreenButtonElement.id = 'fullscreenButton';
-    const basePath = window.location.pathname.startsWith('/rs') ? '/rs' : '';
+    const basePath = getBasePath();
     this.fullScreenButtonElement.src = `${basePath}/images/FullScreen.png`;
     this.fullScreenButtonElement.addEventListener("click", this._onClickFullscreenButton.bind(this));
     this.playerElement.appendChild(this.fullScreenButtonElement);

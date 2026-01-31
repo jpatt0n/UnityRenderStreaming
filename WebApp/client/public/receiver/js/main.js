@@ -11,6 +11,11 @@ let renderstreaming;
 /** @type {boolean} */
 let useWebSocket;
 
+function getBasePath() {
+  const globalConfig = window.RENDER_STREAMING_CONFIG || {};
+  return globalConfig.basePath || (window.location.pathname.startsWith('/rs') ? '/rs' : '');
+}
+
 const codecPreferences = document.getElementById('codecPreferences');
 const supportsSetCodecPreferences = window.RTCRtpTransceiver &&
   'setCodecPreferences' in window.RTCRtpTransceiver.prototype;
@@ -62,7 +67,7 @@ function showPlayButton() {
   if (!document.getElementById('playButton')) {
     const elementPlayButton = document.createElement('img');
     elementPlayButton.id = 'playButton';
-    const basePath = window.location.pathname.startsWith('/rs') ? '/rs' : '';
+    const basePath = getBasePath();
     elementPlayButton.src = `${basePath}/images/Play.png`;
     elementPlayButton.alt = 'Start Streaming';
     playButton = document.getElementById('player').appendChild(elementPlayButton);

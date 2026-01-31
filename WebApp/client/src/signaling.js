@@ -1,5 +1,18 @@
 import * as Logger from "./logger.js";
 
+const globalConfig = window.RENDER_STREAMING_CONFIG || {};
+const signalingBaseUrl = (globalConfig.signalingBaseUrl || location.origin).replace(/\/$/, '');
+const signalingHttpBaseUrl = `${signalingBaseUrl}/signaling`;
+
+function getWebSocketUrl() {
+  const url = new URL(signalingBaseUrl);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  if (url.pathname === "/") {
+    url.pathname = "";
+  }
+  return url.toString();
+}
+
 export class Signaling extends EventTarget {
 
   constructor(interval = 1000) {
@@ -19,7 +32,7 @@ export class Signaling extends EventTarget {
   }
 
   url(method, parameter='') {
-    let ret = location.origin + '/signaling';
+    let ret = signalingHttpBaseUrl;
     if(method)
       ret += '/' + method;
     if(parameter)
@@ -138,13 +151,7 @@ export class WebSocketSignaling extends EventTarget {
     this.interval = interval;
     this.sleep = msec => new Promise(resolve => setTimeout(resolve, msec));
 
-    let websocketUrl;
-    if (location.protocol === "https:") {
-      websocketUrl = "wss://" + location.host;
-    } else {
-      websocketUrl = "ws://" + location.host;
-    }
-
+    const websocketUrl = getWebSocketUrl();
     this.websocket = new WebSocket(websocketUrl);
     this.connectionId = null;
 
