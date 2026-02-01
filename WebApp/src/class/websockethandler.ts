@@ -120,6 +120,10 @@ function onAnswer(ws: WebSocket, message: any): void {
   const pair = connectionPair.get(connectionId);
   const otherSessionWs = pair[0] == ws ? pair[1] : pair[0];
 
+  if (!otherSessionWs || !clients.has(otherSessionWs)) {
+    return;
+  }
+
   if (!isPrivate) {
     connectionPair.set(connectionId, [otherSessionWs, ws]);
   }
