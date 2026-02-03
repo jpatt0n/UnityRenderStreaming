@@ -124,6 +124,11 @@ export class Sender extends LocalInputManager {
     if (!this._corrector.isReady) {
       return;
     }
+    if ((event.type === 'mousedown' || event.type === 'mouseup') &&
+      (event.button === 3 || event.button === 4)) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
     if (!this._loggedMouseEvent) {
       this._loggedMouseEvent = true;
     }
@@ -145,12 +150,26 @@ export class Sender extends LocalInputManager {
         }
       }
       // TextEvent
-      this._queueTextEvent(this.keyboard, event);
+      if (this._isTextInputKey(event)) {
+        this._queueTextEvent(this.keyboard, event);
+      }
     }
     else if(event.type == 'keyup') {
       this.keyboard.queueEvent(event);
       this._queueStateEvent(this.keyboard.currentState, this.keyboard);
     }
+  }
+  _isTextInputKey(event) {
+    if (!event || !event.key) {
+      return false;
+    }
+    if (event.key.length === 1) {
+      return true;
+    }
+    return event.key === 'Enter'
+      || event.key === 'Backspace'
+      || event.key === 'Tab'
+      || event.key === 'Delete';
   }
   _onTouchEvent(event) {
     if (!this._corrector.isReady) {
