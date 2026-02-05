@@ -299,9 +299,12 @@ async function startMicrophone() {
     return;
   }
 
+  const supported = navigator.mediaDevices?.getSupportedConstraints?.() ?? {};
   const constraints = {
     audio: {
-      deviceId: audioSelect && audioSelect.value ? { exact: audioSelect.value } : undefined
+      deviceId: audioSelect && audioSelect.value ? { exact: audioSelect.value } : undefined,
+      echoCancellation: supported.echoCancellation ? true : undefined,
+      noiseSuppression: supported.noiseSuppression ? true : undefined
     }
   };
 
