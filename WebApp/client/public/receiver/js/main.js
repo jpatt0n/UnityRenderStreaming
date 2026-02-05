@@ -1,4 +1,4 @@
-import { getServerConfig, getRTCConfiguration } from "../../js/config.js";
+import { getServerConfig, getRTCConfiguration, getKrispConfig } from "../../js/config.js";
 import { createDisplayStringArray } from "../../js/stats.js";
 import { VideoPlayer } from "../../js/videoplayer.js";
 import { RenderStreaming } from "../../module/renderstreaming.js";
@@ -25,6 +25,8 @@ const settingsPanel = document.getElementById('settingsPanel');
 const joinButton = document.getElementById('joinButton');
 const disconnectButton = document.getElementById('disconnectButton');
 const micStateLabel = document.getElementById('micStateLabel');
+const krispCheck = document.getElementById('krispCheck');
+const krispStateLabel = document.getElementById('krispStateLabel');
 
 const playerDiv = document.getElementById('player');
 const lockMouseCheck = document.getElementById('lockMouseCheck');
@@ -32,6 +34,10 @@ const usernameInput = document.getElementById('usernameInput');
 const micCheck = document.getElementById('micCheck');
 const audioSelect = document.querySelector('select#audioSource');
 const videoPlayer = new VideoPlayer();
+const krispConfig = getKrispConfig();
+let krispUserMedia = null;
+let krispLoadPromise = null;
+let localAudioUsesKrisp = false;
 
 setup();
 
@@ -83,6 +89,7 @@ async function setup() {
   await setupAudioInputSelect();
   restoreUsername();
   updateMicState();
+  updateKrispState();
   if (settingsMenu) {
     settingsMenu.hidden = true;
     if (settingsToggle) {
@@ -289,32 +296,133 @@ async function setupAudioInputSelect() {
 let localAudioStream = null;
 let localAudioTrack = null;
 
+function updateKrispState() {
+  if (!krispCheck || !krispStateLabel) {
+    return;
+  }
+  if (!krispConfig.enabled) {
+    krispCheck.checked = false;
+    krispCheck.disabled = true;
+    krispStateLabel.textContent = 'Unavailable';
+    krispCheck.title = 'Noise reduction disabled in configuration.';
+    return;
+  }
+  krispCheck.disabled = false;
+  krispCheck.title = '';
+  krispStateLabel.textContent = krispCheck.checked ? 'Enabled' : 'Disabled';
+}
+
+function shouldUseKrisp() {
+  return krispCheck && krispCheck.checked && krispConfig.enabled;
+}
+
+function buildKrispModels() {
+  const models = Object.assign({}, krispConfig.models || {});
+  if (krispConfig.preload) {
+    if (typeof models.modelNC === 'string') {
+      models.modelNC = { url: models.modelNC, preload: true };
+    }
+    if (typeof models.model8 === 'string') {
+      models.model8 = { url: models.model8, preload: true };
+    }
+  }
+  return models;
+}
+
+async function loadKrispUserMedia() {
+  if (krispUserMedia) {
+    return krispUserMedia;
+  }
+  if (krispLoadPromise) {
+    return krispLoadPromise;
+  }
+  const modulePath = `${krispConfig.basePath}/dist/usermedia.mjs`;
+  krispLoadPromise = (async () => {
+    const module = await import(modulePath);
+    const UserMedia = module.default || module.UserMedia || module;
+    if (!UserMedia) {
+      throw new Error('Krisp UserMedia module export not found.');
+    }
+    const userMedia = new UserMedia({ singleStream: true });
+    await userMedia.initSDK({
+      params: {
+        useBVC: false,
+        models: buildKrispModels(),
+      },
+    });
+    krispUserMedia = userMedia;
+    return userMedia;
+  })().catch((err) => {
+    krispLoadPromise = null;
+    throw err;
+  });
+  return krispLoadPromise;
+}
+
+async function startBrowserMicrophone(constraints) {
+  localAudioStream = await navigator.mediaDevices.getUserMedia(constraints);
+  localAudioTrack = localAudioStream.getAudioTracks()[0];
+  localAudioUsesKrisp = false;
+}
+
 async function startMicrophone() {
   if (!renderstreaming) {
     return;
   }
 
-  if (localAudioTrack && localAudioTrack.readyState === 'live') {
+  const wantsKrisp = shouldUseKrisp();
+  if (localAudioTrack && localAudioTrack.readyState === 'live' && localAudioUsesKrisp === wantsKrisp) {
     localAudioTrack.enabled = true;
     return;
   }
 
-  const constraints = {
+  const baseConstraints = {
     audio: {
       deviceId: audioSelect && audioSelect.value ? { exact: audioSelect.value } : undefined
     }
   };
 
   try {
-    localAudioStream = await navigator.mediaDevices.getUserMedia(constraints);
+    if (wantsKrisp) {
+      const krispConstraints = {
+        audio: {
+          deviceId: baseConstraints.audio.deviceId,
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+        },
+      };
+      const userMedia = await loadKrispUserMedia();
+      await userMedia.loadUserMedia(krispConstraints, { enableOnceReady: true });
+      localAudioStream = userMedia.stream;
+      localAudioTrack = localAudioStream ? localAudioStream.getAudioTracks()[0] : null;
+      localAudioUsesKrisp = true;
+    } else {
+      await startBrowserMicrophone(baseConstraints);
+    }
   } catch (err) {
-    setStatusMessage(`Microphone error: ${err.message || err}`);
-    micCheck.checked = false;
-    updateMicState();
-    return;
+    if (wantsKrisp) {
+      console.warn('Krisp failed to initialize, falling back to raw microphone.', err);
+      if (krispCheck) {
+        krispCheck.checked = false;
+        updateKrispState();
+      }
+      try {
+        await startBrowserMicrophone(baseConstraints);
+      } catch (fallbackErr) {
+        setStatusMessage(`Microphone error: ${fallbackErr.message || fallbackErr}`);
+        micCheck.checked = false;
+        updateMicState();
+        return;
+      }
+    } else {
+      setStatusMessage(`Microphone error: ${err.message || err}`);
+      micCheck.checked = false;
+      updateMicState();
+      return;
+    }
   }
 
-  localAudioTrack = localAudioStream.getAudioTracks()[0];
   if (!localAudioTrack) {
     return;
   }
@@ -328,6 +436,7 @@ function stopMicrophone() {
     localAudioTrack = null;
   }
   localAudioStream = null;
+  localAudioUsesKrisp = false;
 }
 
 function updateMicState() {
@@ -346,6 +455,16 @@ if (micCheck) {
       await startMicrophone();
     } else if (localAudioTrack) {
       localAudioTrack.enabled = false;
+    }
+  });
+}
+
+if (krispCheck) {
+  krispCheck.addEventListener('change', async () => {
+    updateKrispState();
+    if (micCheck && micCheck.checked) {
+      stopMicrophone();
+      await startMicrophone();
     }
   });
 }
