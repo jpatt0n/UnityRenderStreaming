@@ -25,18 +25,11 @@ const settingsPanel = document.getElementById('settingsPanel');
 const joinButton = document.getElementById('joinButton');
 const disconnectButton = document.getElementById('disconnectButton');
 const micStateLabel = document.getElementById('micStateLabel');
-const interviewCheck = document.getElementById('interviewCheck');
-const interviewWebcamSection = document.getElementById('interviewWebcamSection');
 const webcamCheck = document.getElementById('webcamCheck');
 const webcamStateLabel = document.getElementById('webcamStateLabel');
 const videoSelect = document.querySelector('select#videoSource');
 const webcamPreview = document.getElementById('webcamPreview');
 const webcamPreviewPlaceholder = document.getElementById('webcamPreviewPlaceholder');
-const interviewDock = document.getElementById('interviewDock');
-const dockMicToggle = document.getElementById('dockMicToggle');
-const dockCamToggle = document.getElementById('dockCamToggle');
-const dockDisconnect = document.getElementById('dockDisconnect');
-const dockExitInterview = document.getElementById('dockExitInterview');
 
 const playerDiv = document.getElementById('player');
 const lockMouseCheck = document.getElementById('lockMouseCheck');
@@ -44,12 +37,9 @@ const usernameInput = document.getElementById('usernameInput');
 const micCheck = document.getElementById('micCheck');
 const audioSelect = document.querySelector('select#audioSource');
 const videoPlayer = new VideoPlayer();
-let inputChannel = null;
-let interviewSessionActive = false;
 let webcamTransceiver = null;
 let localVideoStream = null;
 let localVideoTrack = null;
-let pendingAutoJoin = false;
 
 setup();
 
@@ -92,12 +82,6 @@ if (statsToggle && statsPanel) {
   });
 }
 
-if (interviewCheck) {
-  interviewCheck.addEventListener('change', () => {
-    updateInterviewUi();
-  });
-}
-
 if (webcamCheck) {
   webcamCheck.addEventListener('change', async () => {
     updateWebcamState();
@@ -118,38 +102,6 @@ if (videoSelect) {
   });
 }
 
-if (dockMicToggle) {
-  dockMicToggle.addEventListener('click', () => {
-    if (!micCheck) {
-      return;
-    }
-    micCheck.checked = !micCheck.checked;
-    micCheck.dispatchEvent(new Event('change'));
-  });
-}
-
-if (dockCamToggle) {
-  dockCamToggle.addEventListener('click', () => {
-    if (!webcamCheck) {
-      return;
-    }
-    webcamCheck.checked = !webcamCheck.checked;
-    webcamCheck.dispatchEvent(new Event('change'));
-  });
-}
-
-if (dockDisconnect) {
-  dockDisconnect.addEventListener('click', () => {
-    void onClickDisconnectButton();
-  });
-}
-
-if (dockExitInterview) {
-  dockExitInterview.addEventListener('click', () => {
-    void exitInterview();
-  });
-}
-
 async function setup() {
   setUiState('ready');
   const res = await getServerConfig();
@@ -160,7 +112,6 @@ async function setup() {
   await setupVideoInputSelect();
   restoreUsername();
   updateMicState();
-  updateInterviewUi();
   updateWebcamState();
   if (settingsMenu) {
     settingsMenu.hidden = true;
@@ -186,7 +137,6 @@ function setUiState(state) {
   if (disconnectButton) {
     disconnectButton.hidden = !isConnected;
   }
-  updateInterviewDockVisibility(isConnected);
 
   if (!isConnected && statsPanel && statsToggle) {
     statsPanel.hidden = true;
@@ -229,7 +179,6 @@ function onClickJoinButton() {
   usernameInput.value = username;
   saveUsername(username);
   setStatusMessage('');
-  interviewSessionActive = !!(interviewCheck && interviewCheck.checked);
 
   setUiState('connecting');
   if (settingsMenu) {
@@ -240,7 +189,7 @@ function onClickJoinButton() {
   }
 
   videoPlayer.createPlayer(playerDiv, lockMouseCheck);
-  if (interviewSessionActive && webcamCheck && webcamCheck.checked) {
+  if (webcamCheck && webcamCheck.checked) {
     void startWebcam();
   }
   setupRenderStreaming();
@@ -248,31 +197,6 @@ function onClickJoinButton() {
 
 async function onClickDisconnectButton() {
   await teardownConnection('Disconnected.');
-}
-
-async function exitInterview() {
-  if (!interviewSessionActive) {
-    if (interviewCheck) {
-      interviewCheck.checked = false;
-      updateInterviewUi();
-    }
-    return;
-  }
-  if (isTearingDown) {
-    return;
-  }
-  pendingAutoJoin = true;
-  setStatusMessage('Switching to full controls...');
-  await teardownConnection('');
-  if (!pendingAutoJoin) {
-    return;
-  }
-  pendingAutoJoin = false;
-  if (interviewCheck) {
-    interviewCheck.checked = false;
-  }
-  updateInterviewUi();
-  onClickJoinButton();
 }
 
 async function setupRenderStreaming() {
@@ -288,20 +212,17 @@ async function setupRenderStreaming() {
 
   await renderstreaming.start();
   const username = sanitizeUsername(usernameInput.value);
-  const connectionId = createConnectionId(username, interviewSessionActive);
+  const connectionId = createConnectionId(username);
   await renderstreaming.createConnection(connectionId);
 }
 
 async function onConnect() {
   const channel = renderstreaming.createDataChannel("input");
-  inputChannel = channel;
-  if (!interviewSessionActive) {
-    videoPlayer.setupInput(channel);
-  }
+  videoPlayer.setupInput(channel);
   if (micCheck && micCheck.checked) {
     await startMicrophone();
   }
-  if (interviewSessionActive && webcamCheck && webcamCheck.checked) {
+  if (webcamCheck && webcamCheck.checked) {
     await startWebcam();
   }
   setStatusMessage('');
@@ -331,9 +252,7 @@ async function teardownConnection(message) {
   videoPlayer.deletePlayer();
   stopMicrophone();
   stopWebcam();
-  inputChannel = null;
   webcamTransceiver = null;
-  interviewSessionActive = false;
   if (supportsSetCodecPreferences) {
     codecPreferences.disabled = false;
   }
@@ -427,28 +346,6 @@ async function setupVideoInputSelect() {
   }
 }
 
-function updateInterviewUi() {
-  const isInterview = !!(interviewCheck && interviewCheck.checked);
-  if (interviewWebcamSection) {
-    interviewWebcamSection.hidden = !isInterview;
-  }
-  if (!isInterview) {
-    if (webcamCheck) {
-      webcamCheck.checked = false;
-    }
-    stopWebcam();
-  }
-  updateWebcamState();
-}
-
-function updateInterviewDockVisibility(isConnected) {
-  if (!interviewDock) {
-    return;
-  }
-  const connected = typeof isConnected === 'boolean' ? isConnected : document.body.dataset.state === 'connected';
-  interviewDock.hidden = !(connected && interviewSessionActive);
-}
-
 function updateWebcamState() {
   if (webcamStateLabel && webcamCheck) {
     webcamStateLabel.textContent = webcamCheck.checked ? 'Enabled' : 'Disabled';
@@ -461,9 +358,6 @@ function updateWebcamState() {
     if (wrapper) {
       wrapper.classList.toggle('is-active', !!(webcamCheck && webcamCheck.checked && localVideoTrack));
     }
-  }
-  if (dockCamToggle) {
-    dockCamToggle.setAttribute('aria-pressed', webcamCheck && webcamCheck.checked ? 'true' : 'false');
   }
 }
 
@@ -518,15 +412,9 @@ function updateMicState() {
   if (audioSelect) {
     audioSelect.disabled = !micCheck.checked;
   }
-  if (dockMicToggle) {
-    dockMicToggle.setAttribute('aria-pressed', micCheck && micCheck.checked ? 'true' : 'false');
-  }
 }
 
 async function startWebcam() {
-  if (!interviewSessionActive && !(interviewCheck && interviewCheck.checked)) {
-    return;
-  }
 
   if (localVideoTrack && localVideoTrack.readyState === 'live') {
     localVideoTrack.enabled = true;
@@ -624,14 +512,13 @@ if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
   });
 }
 
-function createConnectionId(username, isInterview) {
+function createConnectionId(username) {
   const base = username || 'guest';
-  const mode = isInterview ? 'interview' : 'guest';
   if (window.crypto && window.crypto.randomUUID) {
-    return `${base}_${mode}_${window.crypto.randomUUID()}`;
+    return `${base}_${window.crypto.randomUUID()}`;
   }
   const rand = Math.random().toString(36).slice(2);
-  return `${base}_${mode}_${rand}`;
+  return `${base}_${rand}`;
 }
 
 function sanitizeUsername(value) {
