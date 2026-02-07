@@ -42,6 +42,23 @@
             </div>
           </div>
 
+          <div class="field">
+            <label>Webcam</label>
+            <div class="mic-row">
+              <label class="toggle">
+                <input type="checkbox" id="webcamCheck" autocomplete="off" />
+                <span id="webcamStateLabel">Disabled</span>
+              </label>
+              <select id="videoSource" autocomplete="off"></select>
+            </div>
+            <div class="webcam-preview" aria-live="polite">
+              <video id="webcamPreview" muted playsinline></video>
+              <div id="webcamPreviewPlaceholder" class="webcam-preview__placeholder">
+                Webcam preview is off
+              </div>
+            </div>
+          </div>
+
           <button id="joinButton" type="button">Join</button>
 
           <div id="settingsMenu" class="settings-menu" hidden>

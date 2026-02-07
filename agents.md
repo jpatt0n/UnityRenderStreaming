@@ -3,6 +3,7 @@
 ## Purpose
 - Unity RenderStreaming package + WebApp signaling server used by Lawgiven.
 - WebApp client assets are synced into the rs-portal so `/access` can embed the receiver UI.
+- Interview mode extends the receiver UI with webcam sending and an interview control dock.
 
 ## Key paths
 - `com.unity.renderstreaming/` — Unity package used inside the Lawgiven project.
@@ -19,6 +20,7 @@
 - Keep the portal’s static assets in sync with this repo via `rs-website/scripts/sync-renderstreaming-client.{sh,ps1}`.
   - `rs-portal/public/rs` mirrors `WebApp/client/public`.
   - `rs-portal/public/rs/module` mirrors `WebApp/client/src`.
+- Interview connections are tagged in the connection id as `_interview_` so Unity can lock input and accept webcam tracks.
 
 ## Running the WebApp
 - `npm install`

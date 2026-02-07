@@ -25,6 +25,11 @@ const settingsPanel = document.getElementById('settingsPanel');
 const joinButton = document.getElementById('joinButton');
 const disconnectButton = document.getElementById('disconnectButton');
 const micStateLabel = document.getElementById('micStateLabel');
+const webcamCheck = document.getElementById('webcamCheck');
+const webcamStateLabel = document.getElementById('webcamStateLabel');
+const videoSelect = document.querySelector('select#videoSource');
+const webcamPreview = document.getElementById('webcamPreview');
+const webcamPreviewPlaceholder = document.getElementById('webcamPreviewPlaceholder');
 
 const playerDiv = document.getElementById('player');
 const lockMouseCheck = document.getElementById('lockMouseCheck');
@@ -32,6 +37,9 @@ const usernameInput = document.getElementById('usernameInput');
 const micCheck = document.getElementById('micCheck');
 const audioSelect = document.querySelector('select#audioSource');
 const videoPlayer = new VideoPlayer();
+let webcamTransceiver = null;
+let localVideoStream = null;
+let localVideoTrack = null;
 
 setup();
 
@@ -74,6 +82,26 @@ if (statsToggle && statsPanel) {
   });
 }
 
+if (webcamCheck) {
+  webcamCheck.addEventListener('change', async () => {
+    updateWebcamState();
+    if (webcamCheck.checked) {
+      await startWebcam();
+    } else {
+      stopWebcam();
+    }
+  });
+}
+
+if (videoSelect) {
+  videoSelect.addEventListener('change', async () => {
+    if (webcamCheck && webcamCheck.checked) {
+      stopWebcam();
+      await startWebcam();
+    }
+  });
+}
+
 async function setup() {
   setUiState('ready');
   const res = await getServerConfig();
@@ -81,8 +109,10 @@ async function setup() {
   showWarningIfNeeded(res.startupMode);
   showCodecSelect();
   await setupAudioInputSelect();
+  await setupVideoInputSelect();
   restoreUsername();
   updateMicState();
+  updateWebcamState();
   if (settingsMenu) {
     settingsMenu.hidden = true;
     if (settingsToggle) {
@@ -159,6 +189,9 @@ function onClickJoinButton() {
   }
 
   videoPlayer.createPlayer(playerDiv, lockMouseCheck);
+  if (webcamCheck && webcamCheck.checked) {
+    void startWebcam();
+  }
   setupRenderStreaming();
 }
 
@@ -189,6 +222,9 @@ async function onConnect() {
   if (micCheck && micCheck.checked) {
     await startMicrophone();
   }
+  if (webcamCheck && webcamCheck.checked) {
+    await startWebcam();
+  }
   setStatusMessage('');
   setUiState('connected');
   showStatsMessage();
@@ -215,6 +251,8 @@ async function teardownConnection(message) {
 
   videoPlayer.deletePlayer();
   stopMicrophone();
+  stopWebcam();
+  webcamTransceiver = null;
   if (supportsSetCodecPreferences) {
     codecPreferences.disabled = false;
   }
@@ -286,6 +324,43 @@ async function setupAudioInputSelect() {
   }
 }
 
+async function setupVideoInputSelect() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+    return;
+  }
+  if (!videoSelect) {
+    return;
+  }
+
+  const deviceInfos = await navigator.mediaDevices.enumerateDevices();
+  videoSelect.innerHTML = '';
+
+  for (let i = 0; i !== deviceInfos.length; ++i) {
+    const deviceInfo = deviceInfos[i];
+    if (deviceInfo.kind === 'videoinput') {
+      const option = document.createElement('option');
+      option.value = deviceInfo.deviceId;
+      option.text = deviceInfo.label || `camera ${videoSelect.length + 1}`;
+      videoSelect.appendChild(option);
+    }
+  }
+}
+
+function updateWebcamState() {
+  if (webcamStateLabel && webcamCheck) {
+    webcamStateLabel.textContent = webcamCheck.checked ? 'Enabled' : 'Disabled';
+  }
+  if (videoSelect) {
+    videoSelect.disabled = !(webcamCheck && webcamCheck.checked);
+  }
+  if (webcamPreview && webcamPreviewPlaceholder) {
+    const wrapper = webcamPreview.closest('.webcam-preview');
+    if (wrapper) {
+      wrapper.classList.toggle('is-active', !!(webcamCheck && webcamCheck.checked && localVideoTrack));
+    }
+  }
+}
+
 let localAudioStream = null;
 let localAudioTrack = null;
 
@@ -342,6 +417,77 @@ function updateMicState() {
   }
 }
 
+async function startWebcam() {
+
+  if (localVideoTrack && localVideoTrack.readyState === 'live') {
+    localVideoTrack.enabled = true;
+    updateWebcamState();
+    await ensureWebcamTrackAttached();
+    return;
+  }
+
+  const constraints = {
+    video: {
+      deviceId: videoSelect && videoSelect.value ? { exact: videoSelect.value } : undefined
+    }
+  };
+
+  try {
+    localVideoStream = await navigator.mediaDevices.getUserMedia(constraints);
+  } catch (err) {
+    setStatusMessage(`Webcam error: ${err.message || err}`);
+    if (webcamCheck) {
+      webcamCheck.checked = false;
+    }
+    updateWebcamState();
+    return;
+  }
+
+  localVideoTrack = localVideoStream.getVideoTracks()[0];
+  if (!localVideoTrack) {
+    return;
+  }
+
+  if (webcamPreview) {
+    webcamPreview.srcObject = localVideoStream;
+    webcamPreview.play?.().catch(() => {});
+  }
+  updateWebcamState();
+  await ensureWebcamTrackAttached();
+}
+
+async function ensureWebcamTrackAttached() {
+  if (!renderstreaming || !localVideoTrack) {
+    return;
+  }
+
+  if (webcamTransceiver && webcamTransceiver.sender) {
+    try {
+      await webcamTransceiver.sender.replaceTrack(localVideoTrack);
+      return;
+    } catch (err) {
+      // fall through to create a new transceiver
+    }
+  }
+
+  webcamTransceiver = renderstreaming.addTransceiver(localVideoTrack, { direction: 'sendonly' });
+}
+
+function stopWebcam() {
+  if (localVideoTrack) {
+    localVideoTrack.stop();
+    localVideoTrack = null;
+  }
+  if (webcamTransceiver && webcamTransceiver.sender) {
+    webcamTransceiver.sender.replaceTrack(null).catch(() => {});
+  }
+  localVideoStream = null;
+  if (webcamPreview) {
+    webcamPreview.srcObject = null;
+  }
+  updateWebcamState();
+}
+
 if (micCheck) {
   micCheck.addEventListener('change', async () => {
     updateMicState();
@@ -363,7 +509,10 @@ if (audioSelect) {
 }
 
 if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
-  navigator.mediaDevices.addEventListener('devicechange', setupAudioInputSelect);
+  navigator.mediaDevices.addEventListener('devicechange', () => {
+    void setupAudioInputSelect();
+    void setupVideoInputSelect();
+  });
 }
 
 function createConnectionId(username) {
