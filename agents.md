@@ -30,3 +30,4 @@
 ## Notes
 - CORS is permissive in `WebApp/src/server.ts` so the portal domain can call the signaling endpoints.
 - Base path `/rs` is for static assets; `/config` and `/signaling` also exist at the root for native embeds.
+- Input channel handshake/rebind is replace-not-append: `InputReceiver.SetChannel(...)` disposes prior remoting state before binding a new channel, and reconnect flows rely on this behavior.
