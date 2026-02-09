@@ -29,31 +29,42 @@ export default class WSSignaling {
         // to: to connection id
         // data: any message data structure
 
-        const msg = JSON.parse(event.data);
+        let msg: any = null;
+        try {
+          msg = JSON.parse(event.data as string);
+        } catch (err) {
+          console.warn(`invalid websocket payload: ${err}`);
+          return;
+        }
+
         if (!msg || !this) {
           return;
         }
 
         console.log(msg);
 
-        switch (msg.type) {
-          case "connect":
-            handler.onConnect(ws, msg.connectionId);
-            break;
-          case "disconnect":
-            handler.onDisconnect(ws, msg.connectionId);
-            break;
-          case "offer":
-            handler.onOffer(ws, msg.data);
-            break;
-          case "answer":
-            handler.onAnswer(ws, msg.data);
-            break;
-          case "candidate":
-            handler.onCandidate(ws, msg.data);
-            break;
-          default:
-            break;
+        try {
+          switch (msg.type) {
+            case "connect":
+              handler.onConnect(ws, msg.connectionId);
+              break;
+            case "disconnect":
+              handler.onDisconnect(ws, msg.connectionId);
+              break;
+            case "offer":
+              handler.onOffer(ws, msg.data);
+              break;
+            case "answer":
+              handler.onAnswer(ws, msg.data);
+              break;
+            case "candidate":
+              handler.onCandidate(ws, msg.data);
+              break;
+            default:
+              break;
+          }
+        } catch (err) {
+          console.error(`websocket message handling failed: ${err}`);
         }
       };
     });

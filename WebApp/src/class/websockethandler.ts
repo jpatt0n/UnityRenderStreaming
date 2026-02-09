@@ -24,18 +24,37 @@ function reset(mode: string): void {
   isPrivate = mode == "private";
 }
 
+function safeSend(ws: WebSocket, payload: string): boolean {
+  if (!ws || ws.readyState !== 1) {
+    return false;
+  }
+
+  try {
+    ws.send(payload);
+    return true;
+  } catch (err) {
+    console.warn(`websocket send failed: ${err}`);
+    return false;
+  }
+}
+
 function add(ws: WebSocket): void {
   clients.set(ws, new Set<string>());
 }
 
 function remove(ws: WebSocket): void {
   const connectionIds = clients.get(ws);
+  if (!connectionIds) {
+    clients.delete(ws);
+    return;
+  }
+
   connectionIds.forEach(connectionId => {
     const pair = connectionPair.get(connectionId);
     if (pair) {
       const otherSessionWs = pair[0] == ws ? pair[1] : pair[0];
       if (otherSessionWs) {
-        otherSessionWs.send(JSON.stringify({ type: "disconnect", connectionId: connectionId }));
+        safeSend(otherSessionWs, JSON.stringify({ type: "disconnect", connectionId: connectionId }));
       }
     }
     connectionPair.delete(connectionId);
@@ -51,7 +70,7 @@ function onConnect(ws: WebSocket, connectionId: string): void {
       const pair = connectionPair.get(connectionId);
 
       if (pair[0] != null && pair[1] != null) {
-        ws.send(JSON.stringify({ type: "error", message: `${connectionId}: This connection id is already used.` }));
+        safeSend(ws, JSON.stringify({ type: "error", message: `${connectionId}: This connection id is already used.` }));
         return;
       } else if (pair[0] != null) {
         connectionPair.set(connectionId, [pair[0], ws]);
@@ -64,22 +83,22 @@ function onConnect(ws: WebSocket, connectionId: string): void {
 
   const connectionIds = getOrCreateConnectionIds(ws);
   connectionIds.add(connectionId);
-  ws.send(JSON.stringify({ type: "connect", connectionId: connectionId, polite: polite }));
+  safeSend(ws, JSON.stringify({ type: "connect", connectionId: connectionId, polite: polite }));
 }
 
 function onDisconnect(ws: WebSocket, connectionId: string): void {
   const connectionIds = clients.get(ws);
-  connectionIds.delete(connectionId);
+  connectionIds?.delete(connectionId);
 
   if (connectionPair.has(connectionId)) {
     const pair = connectionPair.get(connectionId);
     const otherSessionWs = pair[0] == ws ? pair[1] : pair[0];
     if (otherSessionWs) {
-      otherSessionWs.send(JSON.stringify({ type: "disconnect", connectionId: connectionId }));
+      safeSend(otherSessionWs, JSON.stringify({ type: "disconnect", connectionId: connectionId }));
     }
   }
   connectionPair.delete(connectionId);
-  ws.send(JSON.stringify({ type: "disconnect", connectionId: connectionId }));
+  safeSend(ws, JSON.stringify({ type: "disconnect", connectionId: connectionId }));
 }
 
 function onOffer(ws: WebSocket, message: any): void {
@@ -92,7 +111,7 @@ function onOffer(ws: WebSocket, message: any): void {
       const otherSessionWs = pair[0] == ws ? pair[1] : pair[0];
       if (otherSessionWs) {
         newOffer.polite = true;
-        otherSessionWs.send(JSON.stringify({ from: connectionId, to: "", type: "offer", data: newOffer }));
+        safeSend(otherSessionWs, JSON.stringify({ from: connectionId, to: "", type: "offer", data: newOffer }));
       }
     }
     return;
@@ -103,7 +122,7 @@ function onOffer(ws: WebSocket, message: any): void {
     if (k == ws) {
       return;
     }
-    k.send(JSON.stringify({ from: connectionId, to: "", type: "offer", data: newOffer }));
+    safeSend(k, JSON.stringify({ from: connectionId, to: "", type: "offer", data: newOffer }));
   });
 }
 
@@ -128,7 +147,7 @@ function onAnswer(ws: WebSocket, message: any): void {
     connectionPair.set(connectionId, [otherSessionWs, ws]);
   }
 
-  otherSessionWs.send(JSON.stringify({ from: connectionId, to: "", type: "answer", data: newAnswer }));
+  safeSend(otherSessionWs, JSON.stringify({ from: connectionId, to: "", type: "answer", data: newAnswer }));
 }
 
 function onCandidate(ws: WebSocket, message: any): void {
@@ -140,7 +159,7 @@ function onCandidate(ws: WebSocket, message: any): void {
       const pair = connectionPair.get(connectionId);
       const otherSessionWs = pair[0] == ws ? pair[1] : pair[0];
       if (otherSessionWs) {
-        otherSessionWs.send(JSON.stringify({ from: connectionId, to: "", type: "candidate", data: candidate }));
+        safeSend(otherSessionWs, JSON.stringify({ from: connectionId, to: "", type: "candidate", data: candidate }));
       }
     }
     return;
@@ -150,7 +169,7 @@ function onCandidate(ws: WebSocket, message: any): void {
     if (k === ws) {
       return;
     }
-    k.send(JSON.stringify({ from: connectionId, to: "", type: "candidate", data: candidate }));
+    safeSend(k, JSON.stringify({ from: connectionId, to: "", type: "candidate", data: candidate }));
   });
 }
 

@@ -72,8 +72,15 @@ function checkSessionId(req: Request, res: Response, next): void {
   next();
 }
 
+function nowOrDefault(sessionId: string): number {
+  return lastRequestedTime.get(sessionId) ?? Date.now();
+}
+
 function _deleteConnection(sessionId:string, connectionId:string, datetime:number) {
-  clients.get(sessionId).delete(connectionId);
+  const sessionConnections = clients.get(sessionId);
+  if (sessionConnections) {
+    sessionConnections.delete(connectionId);
+  }
 
   if(isPrivate) {
     if (connectionPair.has(connectionId)) {
@@ -83,7 +90,9 @@ function _deleteConnection(sessionId:string, connectionId:string, datetime:numbe
         if (clients.has(otherSessionId)) {
           clients.get(otherSessionId).delete(connectionId);
           const array1 = disconnections.get(otherSessionId);
-          array1.push(new Disconnection(connectionId, datetime));
+          if (array1) {
+            array1.push(new Disconnection(connectionId, datetime));
+          }
         }
       }
     }
@@ -96,17 +105,20 @@ function _deleteConnection(sessionId:string, connectionId:string, datetime:numbe
   }
 
   connectionPair.delete(connectionId);
-  offers.get(sessionId).delete(connectionId);
-  answers.get(sessionId).delete(connectionId);
-  candidates.get(sessionId).delete(connectionId);
+  offers.get(sessionId)?.delete(connectionId);
+  answers.get(sessionId)?.delete(connectionId);
+  candidates.get(sessionId)?.delete(connectionId);
 
   const array2 = disconnections.get(sessionId);
-  array2.push(new Disconnection(connectionId, datetime));
+  if (array2) {
+    array2.push(new Disconnection(connectionId, datetime));
+  }
 }
 
 function _deleteSession(sessionId: string) {
-  if(clients.has(sessionId)) {
-    for(const connectionId of Array.from(clients.get(sessionId))) {
+  const sessionConnections = clients.get(sessionId);
+  if (sessionConnections) {
+    for(const connectionId of Array.from(sessionConnections)) {
       _deleteConnection(sessionId, connectionId, Date.now());
     }
   }
@@ -131,7 +143,8 @@ function _checkForTimedOutSessions(): void {
 
 function _getConnection(sessionId: string): string[] {
   _checkForTimedOutSessions();
-  return Array.from(clients.get(sessionId));
+  const sessionConnections = clients.get(sessionId);
+  return sessionConnections ? Array.from(sessionConnections) : [];
 }
 
 function _getDisconnection(sessionId: string, fromTime: number): Disconnection[] {
@@ -181,7 +194,12 @@ function _getAnswer(sessionId: string, fromTime: number): [string, Answer][] {
 }
 
 function _getCandidate(sessionId: string, fromTime: number): [string, Candidate][] {
-  const connectionIds = Array.from(clients.get(sessionId));
+  const sessionConnections = clients.get(sessionId);
+  if (!sessionConnections) {
+    return [];
+  }
+
+  const connectionIds = Array.from(sessionConnections);
   const arr: [string, Candidate][] = [];
   for (const connectionId of connectionIds) {
     const pair = connectionPair.get(connectionId);
@@ -279,7 +297,7 @@ function deleteSession(req: Request, res: Response): void {
 function createConnection(req: Request, res: Response): void {
   const sessionId: string = req.header('session-id');
   const { connectionId } = req.body;
-  const datetime = lastRequestedTime.get(sessionId);
+  const datetime = nowOrDefault(sessionId);
 
   if (connectionId == null) {
     res.status(400).send({ error: new Error(`connectionId is required`) });
@@ -314,7 +332,12 @@ function createConnection(req: Request, res: Response): void {
 function deleteConnection(req: Request, res: Response): void {
   const sessionId: string = req.header('session-id');
   const { connectionId } = req.body;
-  const datetime = lastRequestedTime.get(sessionId);
+  const datetime = nowOrDefault(sessionId);
+
+  if (connectionId == null) {
+    res.status(400).send({ error: new Error(`connectionId is required`) });
+    return;
+  }
 
   _deleteConnection(sessionId, connectionId, datetime);
 
@@ -324,9 +347,14 @@ function deleteConnection(req: Request, res: Response): void {
 function postOffer(req: Request, res: Response): void {
   const sessionId: string = req.header('session-id');
   const { connectionId } = req.body;
-  const datetime = lastRequestedTime.get(sessionId);
+  const datetime = nowOrDefault(sessionId);
   let keySessionId = null;
   let polite = false;
+
+  if (connectionId == null) {
+    res.status(400).send({ error: new Error(`connectionId is required`) });
+    return;
+  }
 
   if (isPrivate) {
     if (connectionPair.has(connectionId)) {
@@ -335,7 +363,7 @@ function postOffer(req: Request, res: Response): void {
       if (keySessionId != null) {
         polite = true;
         const map = offers.get(keySessionId);
-        map.set(connectionId, new Offer(req.body.sdp, datetime, polite));
+        map?.set(connectionId, new Offer(req.body.sdp, datetime, polite));
       }
     }
     res.sendStatus(200);
@@ -349,7 +377,7 @@ function postOffer(req: Request, res: Response): void {
 
   keySessionId = sessionId;
   const map = offers.get(keySessionId);
-  map.set(connectionId, new Offer(req.body.sdp, datetime, polite));
+  map?.set(connectionId, new Offer(req.body.sdp, datetime, polite));
 
   res.sendStatus(200);
 }
@@ -357,7 +385,13 @@ function postOffer(req: Request, res: Response): void {
 function postAnswer(req: Request, res: Response): void {
   const sessionId: string = req.header('session-id');
   const { connectionId } = req.body;
-  const datetime = lastRequestedTime.get(sessionId);
+  const datetime = nowOrDefault(sessionId);
+
+  if (connectionId == null) {
+    res.status(400).send({ error: new Error(`connectionId is required`) });
+    return;
+  }
+
   const connectionIds = getOrCreateConnectionIds(sessionId);
   connectionIds.add(connectionId);
 
@@ -369,7 +403,7 @@ function postAnswer(req: Request, res: Response): void {
   // add connectionPair
   const pair = connectionPair.get(connectionId);
   const otherSessionId = pair[0] == sessionId ? pair[1] : pair[0];
-  if (!clients.has(otherSessionId)) {
+  if (!otherSessionId || !clients.has(otherSessionId)) {
     // already deleted
     res.sendStatus(200);
     return;
@@ -380,7 +414,7 @@ function postAnswer(req: Request, res: Response): void {
   }
 
   const map = answers.get(otherSessionId);
-  map.set(connectionId, new Answer(req.body.sdp, datetime));
+  map?.set(connectionId, new Answer(req.body.sdp, datetime));
 
   // update datetime for candidates
   const mapCandidates = candidates.get(otherSessionId);
@@ -398,9 +432,19 @@ function postAnswer(req: Request, res: Response): void {
 function postCandidate(req: Request, res: Response): void {
   const sessionId: string = req.header('session-id');
   const { connectionId } = req.body;
-  const datetime = lastRequestedTime.get(sessionId);
+  const datetime = nowOrDefault(sessionId);
+
+  if (connectionId == null) {
+    res.status(400).send({ error: new Error(`connectionId is required`) });
+    return;
+  }
 
   const map = candidates.get(sessionId);
+  if (!map) {
+    res.sendStatus(200);
+    return;
+  }
+
   if (!map.has(connectionId)) {
     map.set(connectionId, []);
   }

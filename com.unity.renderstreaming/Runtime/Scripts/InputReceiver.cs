@@ -295,9 +295,12 @@ namespace Unity.RenderStreaming
         /// <param name="channel">The RTCDataChannel to set.</param>
         public override void SetChannel(string connectionId, RTCDataChannel channel)
         {
+            // Replace any previous remoting pipeline before binding a new channel.
+            Dispose();
+
             if (channel == null)
             {
-                Dispose();
+                // Keep base behavior so the existing data channel reference is cleared.
             }
             else
             {
