@@ -3,13 +3,16 @@ import Offer from './offer';
 import Answer from './answer';
 import Candidate from './candidate';
 import { v4 as uuid } from 'uuid';
+import { authStore, ResolvedAuthProfile, toPublicAuthProfile } from './authstore';
 
 class Disconnection {
   id: string;
   datetime: number;
-  constructor(id: string, datetime: number) {
+  reason?: string;
+  constructor(id: string, datetime: number, reason?: string) {
     this.id = id;
     this.datetime = datetime;
+    this.reason = reason;
   }
 }
 
@@ -38,6 +41,18 @@ const candidates: Map<string, Map<string, Candidate[]>> = new Map<string, Map<st
 // [{sessionId:[Disconnection,...]}]
 const disconnections: Map<string, Disconnection[]> = new Map<string, Disconnection[]>(); // key = sessionId
 
+// [{sessionId:{connectionId:ResolvedAuthProfile}}]
+const connectionAuthProfiles: Map<string, Map<string, ResolvedAuthProfile>> =
+  new Map<string, Map<string, ResolvedAuthProfile>>();
+
+// [{sessionId:{connectionId:passcodeKey}}]
+const connectionPasscodeKeys: Map<string, Map<string, string>> =
+  new Map<string, Map<string, string>>();
+
+// [{passcodeKey:{sessionId,connectionId}}]
+const activeConnectionByPasscode: Map<string, { sessionId: string, connectionId: string }> =
+  new Map<string, { sessionId: string, connectionId: string }>();
+
 function getOrCreateConnectionIds(sessionId: string): Set<string> {
   let connectionIds = null;
   if (!clients.has(sessionId)) {
@@ -56,6 +71,24 @@ function reset(mode: string): void {
   answers.clear();
   candidates.clear();
   disconnections.clear();
+  connectionAuthProfiles.clear();
+  connectionPasscodeKeys.clear();
+  activeConnectionByPasscode.clear();
+  authStore.load();
+}
+
+function getOrCreateAuthProfileMap(sessionId: string): Map<string, ResolvedAuthProfile> {
+  if (!connectionAuthProfiles.has(sessionId)) {
+    connectionAuthProfiles.set(sessionId, new Map<string, ResolvedAuthProfile>());
+  }
+  return connectionAuthProfiles.get(sessionId);
+}
+
+function getOrCreatePasscodeKeyMap(sessionId: string): Map<string, string> {
+  if (!connectionPasscodeKeys.has(sessionId)) {
+    connectionPasscodeKeys.set(sessionId, new Map<string, string>());
+  }
+  return connectionPasscodeKeys.get(sessionId);
 }
 
 function checkSessionId(req: Request, res: Response, next): void {
@@ -72,8 +105,36 @@ function checkSessionId(req: Request, res: Response, next): void {
   next();
 }
 
-function _deleteConnection(sessionId:string, connectionId:string, datetime:number) {
-  clients.get(sessionId).delete(connectionId);
+function getCurrentDatetime(sessionId: string): number {
+  return lastRequestedTime.get(sessionId) || Date.now();
+}
+
+function clearAuthStateForConnection(sessionId: string, connectionId: string): void {
+  const passcodeMap = connectionPasscodeKeys.get(sessionId);
+  const passcodeKey = passcodeMap?.get(connectionId);
+  if (passcodeKey) {
+    const active = activeConnectionByPasscode.get(passcodeKey);
+    if (active && active.connectionId === connectionId && active.sessionId === sessionId) {
+      activeConnectionByPasscode.delete(passcodeKey);
+    }
+    passcodeMap.delete(connectionId);
+  }
+
+  const authMap = connectionAuthProfiles.get(sessionId);
+  authMap?.delete(connectionId);
+
+  if (passcodeMap && passcodeMap.size === 0) {
+    connectionPasscodeKeys.delete(sessionId);
+  }
+  if (authMap && authMap.size === 0) {
+    connectionAuthProfiles.delete(sessionId);
+  }
+}
+
+function _deleteConnection(sessionId:string, connectionId:string, datetime:number, reason?: string) {
+  if (clients.has(sessionId)) {
+    clients.get(sessionId).delete(connectionId);
+  }
 
   if(isPrivate) {
     if (connectionPair.has(connectionId)) {
@@ -83,7 +144,7 @@ function _deleteConnection(sessionId:string, connectionId:string, datetime:numbe
         if (clients.has(otherSessionId)) {
           clients.get(otherSessionId).delete(connectionId);
           const array1 = disconnections.get(otherSessionId);
-          array1.push(new Disconnection(connectionId, datetime));
+          array1.push(new Disconnection(connectionId, datetime, reason));
         }
       }
     }
@@ -91,17 +152,20 @@ function _deleteConnection(sessionId:string, connectionId:string, datetime:numbe
     disconnections.forEach((array, id) => {
       if (id == sessionId)
         return;
-      array.push(new Disconnection(connectionId, datetime));
+      array.push(new Disconnection(connectionId, datetime, reason));
     });
   }
 
   connectionPair.delete(connectionId);
-  offers.get(sessionId).delete(connectionId);
-  answers.get(sessionId).delete(connectionId);
-  candidates.get(sessionId).delete(connectionId);
+  offers.get(sessionId)?.delete(connectionId);
+  answers.get(sessionId)?.delete(connectionId);
+  candidates.get(sessionId)?.delete(connectionId);
+  clearAuthStateForConnection(sessionId, connectionId);
 
   const array2 = disconnections.get(sessionId);
-  array2.push(new Disconnection(connectionId, datetime));
+  if (array2) {
+    array2.push(new Disconnection(connectionId, datetime, reason));
+  }
 }
 
 function _deleteSession(sessionId: string) {
@@ -115,6 +179,8 @@ function _deleteSession(sessionId: string) {
   candidates.delete(sessionId);
   clients.delete(sessionId);
   disconnections.delete(sessionId);
+  connectionAuthProfiles.delete(sessionId);
+  connectionPasscodeKeys.delete(sessionId);
 }
 
 function _checkForTimedOutSessions(): void {
@@ -224,7 +290,16 @@ function getOffer(req: Request, res: Response): void {
   const fromTime: number = req.query.fromtime ? Number(req.query.fromtime) : 0;
   const sessionId: string = req.header('session-id');
   const offers = _getOffer(sessionId, fromTime);
-  res.json({ offers: offers.map((v) => ({ connectionId: v[0], sdp: v[1].sdp, polite: v[1].polite, type: "offer", datetime: v[1].datetime })) });
+  res.json({
+    offers: offers.map((v) => ({
+      connectionId: v[0],
+      sdp: v[1].sdp,
+      polite: v[1].polite,
+      authProfile: v[1].authProfile,
+      type: "offer",
+      datetime: v[1].datetime
+    }))
+  });
 }
 
 function getCandidate(req: Request, res: Response): void {
@@ -248,10 +323,17 @@ function getAll(req: Request, res: Response): void {
   let array: any[] = [];
 
   array = array.concat(connections.map((v) => ({ connectionId: v, type: "connect", datetime: datetime })));
-  array = array.concat(offers.map((v) => ({ connectionId: v[0], sdp: v[1].sdp, polite: v[1].polite, type: "offer", datetime: v[1].datetime })));
+  array = array.concat(offers.map((v) => ({
+    connectionId: v[0],
+    sdp: v[1].sdp,
+    polite: v[1].polite,
+    authProfile: v[1].authProfile,
+    type: "offer",
+    datetime: v[1].datetime
+  })));
   array = array.concat(answers.map((v) => ({ connectionId: v[0], sdp: v[1].sdp, type: "answer", datetime: v[1].datetime })));
   array = array.concat(candidates.map((v) => ({ connectionId: v[0], candidate: v[1].candidate, sdpMLineIndex: v[1].sdpMLineIndex, sdpMid: v[1].sdpMid, type: "candidate", datetime: v[1].datetime })));
-  array = array.concat(disconnections.map((v) => ({ connectionId: v.id, type: "disconnect", datetime: v.datetime })));
+  array = array.concat(disconnections.map((v) => ({ connectionId: v.id, reason: v.reason, type: "disconnect", datetime: v.datetime })));
 
   array.sort((a, b) => a.datetime - b.datetime);
   res.json({ messages: array, datetime: datetime });
@@ -267,6 +349,8 @@ function createSession(req: string | Request, res: Response): void {
   answers.set(sessionId, new Map<string, Answer>());
   candidates.set(sessionId, new Map<string, Candidate[]>());
   disconnections.set(sessionId, []);
+  connectionAuthProfiles.set(sessionId, new Map<string, ResolvedAuthProfile>());
+  connectionPasscodeKeys.set(sessionId, new Map<string, string>());
   res.json({ sessionId: sessionId });
 }
 
@@ -278,13 +362,32 @@ function deleteSession(req: Request, res: Response): void {
 
 function createConnection(req: Request, res: Response): void {
   const sessionId: string = req.header('session-id');
-  const { connectionId } = req.body;
-  const datetime = lastRequestedTime.get(sessionId);
+  const { connectionId, passcode, usernameHint } = req.body;
+  const datetime = getCurrentDatetime(sessionId);
 
   if (connectionId == null) {
     res.status(400).send({ error: new Error(`connectionId is required`) });
     return;
   }
+
+  if (!passcode) {
+    res.status(401).send({ error: { message: "passcode is required" } });
+    return;
+  }
+
+  const resolved = authStore.resolve(passcode, usernameHint);
+  if (!resolved) {
+    res.status(401).send({ error: { message: "invalid passcode" } });
+    return;
+  }
+
+  let reason: string | undefined = undefined;
+  const existing = activeConnectionByPasscode.get(resolved.passcodeKey);
+  if (existing && (existing.sessionId !== sessionId || existing.connectionId !== connectionId)) {
+    _deleteConnection(existing.sessionId, existing.connectionId, datetime, "replaced_by_new_session");
+    reason = "replaced_existing_session";
+  }
+
   let polite = true;
   if (isPrivate) {
     if (connectionPair.has(connectionId)) {
@@ -308,13 +411,28 @@ function createConnection(req: Request, res: Response): void {
 
   const connectionIds = getOrCreateConnectionIds(sessionId);
   connectionIds.add(connectionId);
-  res.json({ connectionId: connectionId, polite: polite, type: "connect", datetime: datetime });
+  getOrCreateAuthProfileMap(sessionId).set(connectionId, resolved.profile);
+  getOrCreatePasscodeKeyMap(sessionId).set(connectionId, resolved.passcodeKey);
+  activeConnectionByPasscode.set(resolved.passcodeKey, { sessionId, connectionId });
+
+  const payload = {
+    connectionId: connectionId,
+    polite: polite,
+    authProfile: toPublicAuthProfile(resolved.profile),
+    type: "connect",
+    datetime: datetime
+  } as any;
+  if (reason) {
+    payload.reason = reason;
+  }
+
+  res.json(payload);
 }
 
 function deleteConnection(req: Request, res: Response): void {
   const sessionId: string = req.header('session-id');
   const { connectionId } = req.body;
-  const datetime = lastRequestedTime.get(sessionId);
+  const datetime = getCurrentDatetime(sessionId);
 
   _deleteConnection(sessionId, connectionId, datetime);
 
@@ -324,7 +442,8 @@ function deleteConnection(req: Request, res: Response): void {
 function postOffer(req: Request, res: Response): void {
   const sessionId: string = req.header('session-id');
   const { connectionId } = req.body;
-  const datetime = lastRequestedTime.get(sessionId);
+  const datetime = getCurrentDatetime(sessionId);
+  const authProfile = connectionAuthProfiles.get(sessionId)?.get(connectionId);
   let keySessionId = null;
   let polite = false;
 
@@ -335,7 +454,7 @@ function postOffer(req: Request, res: Response): void {
       if (keySessionId != null) {
         polite = true;
         const map = offers.get(keySessionId);
-        map.set(connectionId, new Offer(req.body.sdp, datetime, polite));
+        map.set(connectionId, new Offer(req.body.sdp, datetime, polite, authProfile));
       }
     }
     res.sendStatus(200);
@@ -349,7 +468,7 @@ function postOffer(req: Request, res: Response): void {
 
   keySessionId = sessionId;
   const map = offers.get(keySessionId);
-  map.set(connectionId, new Offer(req.body.sdp, datetime, polite));
+  map.set(connectionId, new Offer(req.body.sdp, datetime, polite, authProfile));
 
   res.sendStatus(200);
 }
@@ -357,7 +476,7 @@ function postOffer(req: Request, res: Response): void {
 function postAnswer(req: Request, res: Response): void {
   const sessionId: string = req.header('session-id');
   const { connectionId } = req.body;
-  const datetime = lastRequestedTime.get(sessionId);
+  const datetime = getCurrentDatetime(sessionId);
   const connectionIds = getOrCreateConnectionIds(sessionId);
   connectionIds.add(connectionId);
 
@@ -398,7 +517,7 @@ function postAnswer(req: Request, res: Response): void {
 function postCandidate(req: Request, res: Response): void {
   const sessionId: string = req.header('session-id');
   const { connectionId } = req.body;
-  const datetime = lastRequestedTime.get(sessionId);
+  const datetime = getCurrentDatetime(sessionId);
 
   const map = candidates.get(sessionId);
   if (!map.has(connectionId)) {

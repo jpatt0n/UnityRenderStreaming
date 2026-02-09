@@ -386,6 +386,7 @@ namespace Unity.RenderStreaming.Signaling
                     offer.connectionId = msg.connectionId;
                     offer.sdp = msg.sdp;
                     offer.polite = msg.polite;
+                    offer.authProfile = msg.authProfile;
                     m_mainThreadContext.Post(d => OnOffer?.Invoke(this, offer), null);
                 }
                 else if (msg.type == "answer")

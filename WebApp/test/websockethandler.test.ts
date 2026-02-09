@@ -1,7 +1,6 @@
 import WS from "jest-websocket-mock";
 import Answer from "../src/class/answer";
 import Candidate from "../src/class/candidate";
-import Offer from "../src/class/offer";
 import * as wsHandler from '../src/class/websockethandler';
 
 Date.now = jest.fn(() => 1482363367071);
@@ -13,6 +12,8 @@ describe('websocket signaling test in public mode', () => {
   const connectionId = "12345";
   const connectionId2 = "67890";
   const testsdp = "test sdp";
+  const passcode1 = "HOSTBOT";
+  const passcode2 = "JOSH";
 
   beforeAll(async () => {
     wsHandler.reset("public");
@@ -38,22 +39,33 @@ describe('websocket signaling test in public mode', () => {
   });
 
   test('create connection from session1', async () => {
-    await wsHandler.onConnect(client, connectionId);
-    await expect(server).toReceiveMessage({ type: "connect", connectionId: connectionId, polite: true });
-    expect(server).toHaveReceivedMessages([{ type: "connect", connectionId: connectionId, polite: true }]);
+    await wsHandler.onConnect(client, connectionId, passcode1);
+    await expect(server).toReceiveMessage(expect.objectContaining({
+      type: "connect",
+      connectionId: connectionId,
+      polite: true,
+      authProfile: expect.objectContaining({ passcodeId: "hostbot", role: "host", username: "hostbot" })
+    }));
   });
 
   test('create connection from session2', async () => {
-    await wsHandler.onConnect(client2, connectionId2);
-    await expect(server).toReceiveMessage({ type: "connect", connectionId: connectionId2, polite: true });
-    expect(server).toHaveReceivedMessages([{ type: "connect", connectionId: connectionId2, polite: true }]);
+    await wsHandler.onConnect(client2, connectionId2, passcode2);
+    await expect(server).toReceiveMessage(expect.objectContaining({
+      type: "connect",
+      connectionId: connectionId2,
+      polite: true,
+      authProfile: expect.objectContaining({ passcodeId: "josh", role: "host", username: "josh" })
+    }));
   });
 
   test('send offer from session1', async () => {
     await wsHandler.onOffer(client, { connectionId: connectionId, sdp: testsdp });
-    const receiveOffer = new Offer(testsdp, Date.now(), false);
-    await expect(server).toReceiveMessage({ from: connectionId, to: "", type: "offer", data: receiveOffer });
-    expect(server).toHaveReceivedMessages([{ from: connectionId, to: "", type: "offer", data: receiveOffer }]);
+    await expect(server).toReceiveMessage(expect.objectContaining({
+      from: connectionId,
+      to: "",
+      type: "offer",
+      data: expect.objectContaining({ sdp: testsdp, polite: false, authProfile: expect.objectContaining({ passcodeId: "hostbot" }) })
+    }));
   });
 
   test('send answer from session2', async () => {
@@ -104,6 +116,8 @@ describe('websocket signaling test in private mode', () => {
   let client2: WebSocket;
   const connectionId = "12345";
   const testsdp = "test sdp";
+  const passcode1 = "HOSTBOT";
+  const passcode2 = "JOSH";
 
   beforeAll(async () => {
     wsHandler.reset("private");
@@ -129,22 +143,33 @@ describe('websocket signaling test in private mode', () => {
   });
 
   test('create connection from session1', async () => {
-    await wsHandler.onConnect(client, connectionId);
-    await expect(server).toReceiveMessage({ type: "connect", connectionId: connectionId, polite: false });
-    expect(server).toHaveReceivedMessages([{ type: "connect", connectionId: connectionId, polite: false }]);
+    await wsHandler.onConnect(client, connectionId, passcode1);
+    await expect(server).toReceiveMessage(expect.objectContaining({
+      type: "connect",
+      connectionId: connectionId,
+      polite: false,
+      authProfile: expect.objectContaining({ passcodeId: "hostbot", role: "host", username: "hostbot" })
+    }));
   });
 
   test('create connection from session2', async () => {
-    await wsHandler.onConnect(client2, connectionId);
-    await expect(server).toReceiveMessage({ type: "connect", connectionId: connectionId, polite: true });
-    expect(server).toHaveReceivedMessages([{ type: "connect", connectionId: connectionId, polite: true }]);
+    await wsHandler.onConnect(client2, connectionId, passcode2);
+    await expect(server).toReceiveMessage(expect.objectContaining({
+      type: "connect",
+      connectionId: connectionId,
+      polite: true,
+      authProfile: expect.objectContaining({ passcodeId: "josh", role: "host", username: "josh" })
+    }));
   });
 
   test('send offer from session1', async () => {
     await wsHandler.onOffer(client, { connectionId: connectionId, sdp: testsdp });
-    const receiveOffer = new Offer(testsdp, Date.now(), true);
-    await expect(server).toReceiveMessage({ from: connectionId, to: "", type: "offer", data: receiveOffer });
-    expect(server).toHaveReceivedMessages([{ from: connectionId, to: "", type: "offer", data: receiveOffer }]);
+    await expect(server).toReceiveMessage(expect.objectContaining({
+      from: connectionId,
+      to: "",
+      type: "offer",
+      data: expect.objectContaining({ sdp: testsdp, polite: true, authProfile: expect.objectContaining({ passcodeId: "hostbot" }) })
+    }));
   });
 
   test('send answer from session2', async () => {

@@ -10,6 +10,9 @@ describe('http signaling test in public mode', () => {
   const connectionId = "12345";
   const connectionId2 = "67890";
   const testsdp = "test sdp";
+  const passcode1 = "HOSTBOT";
+  const passcode2 = "JOSH";
+  const passcode3 = "BIRD";
 
   const { res, next, mockClear } = getMockRes();
   const req = getMockReq({ header: jest.fn(() => sessionId) });
@@ -43,17 +46,27 @@ describe('http signaling test in public mode', () => {
   });
 
   test('create connection from session1', async () => {
-    const body = { connectionId: connectionId };
+    const body = { connectionId: connectionId, passcode: passcode1 };
     req.body = body;
     await httpHandler.createConnection(req, res);
-    expect(res.json).toHaveBeenCalledWith({ connectionId: connectionId, polite: true, datetime: expect.anything(), type: "connect" });
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      connectionId: connectionId,
+      polite: true,
+      type: "connect",
+      authProfile: expect.objectContaining({ passcodeId: "hostbot", role: "host", username: "hostbot" })
+    }));
   });
 
   test('create connection from session2', async () => {
-    const body = { connectionId: connectionId2 };
+    const body = { connectionId: connectionId2, passcode: passcode2 };
     req2.body = body;
     await httpHandler.createConnection(req2, res);
-    expect(res.json).toHaveBeenCalledWith({ connectionId: connectionId2, polite: true, datetime: expect.anything(), type: "connect" });
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      connectionId: connectionId2,
+      polite: true,
+      type: "connect",
+      authProfile: expect.objectContaining({ passcodeId: "josh", role: "host", username: "josh" })
+    }));
   });
 
   test('get connection from session1', async () => {
@@ -82,7 +95,9 @@ describe('http signaling test in public mode', () => {
 
   test('get offer from session2', async () => {
     await httpHandler.getOffer(req2, res);
-    expect(res.json).toHaveBeenCalledWith({ offers: [{ connectionId: connectionId, sdp: testsdp, polite: false, datetime: expect.anything(), type: "offer" }] });
+    expect(res.json).toHaveBeenCalledWith({
+      offers: [expect.objectContaining({ connectionId: connectionId, sdp: testsdp, polite: false, datetime: expect.anything(), type: "offer" })]
+    });
   });
 
   test('post answer from session2', async () => {
@@ -128,7 +143,7 @@ describe('http signaling test in public mode', () => {
 
   test('disconnection get from session1', async () => {
     await httpHandler.getAll(req, res);
-    const disconnect = { connectionId: connectionId, datetime: expect.anything(), type: "disconnect" };
+    const disconnect = expect.objectContaining({ connectionId: connectionId, datetime: expect.anything(), type: "disconnect" });
     expect(res.json).toHaveBeenCalledWith({ messages: expect.arrayContaining([disconnect]), datetime: expect.anything() });
   });
 
@@ -160,7 +175,7 @@ describe('http signaling test in public mode', () => {
     await httpHandler.getAll(req, res);
     expect(res.json).toHaveBeenLastCalledWith({ messages: [], datetime: expect.anything() });
 
-    const connectBody = { connectionId: connectionId };
+    const connectBody = { connectionId: connectionId, passcode: passcode1 };
     req.body = connectBody;
     await httpHandler.createConnection(req, res);
 
@@ -168,7 +183,7 @@ describe('http signaling test in public mode', () => {
     req.body = offerBody;
     await httpHandler.postOffer(req, res);
 
-    const offer = { connectionId: connectionId, sdp: testsdp, datetime: expect.anything(), type: "offer", polite: false };
+    const offer = expect.objectContaining({ connectionId: connectionId, sdp: testsdp, datetime: expect.anything(), type: "offer", polite: false });
     await httpHandler.getAll(req, res);
     expect(res.json).toHaveBeenLastCalledWith({ messages: expect.not.arrayContaining([offer]), datetime: expect.anything() });
     await httpHandler.getAll(req2, res);
@@ -184,7 +199,7 @@ describe('http signaling test in public mode', () => {
     req2.body = answerBody;
     await httpHandler.postAnswer(req2, res);
 
-    const disconnect = { connectionId: connectionId, type: "disconnect", datetime: expect.anything() };
+    const disconnect = expect.objectContaining({ connectionId: connectionId, type: "disconnect", datetime: expect.anything() });
     await httpHandler.getAll(req2, res);
     expect(res.json).toHaveBeenLastCalledWith({ messages: expect.arrayContaining([disconnect]), datetime: expect.anything() });
 
@@ -205,7 +220,7 @@ describe('http signaling test in public mode', () => {
     await httpHandler.getAll(req, res);
     expect(res.json).toHaveBeenLastCalledWith({ messages: [], datetime: expect.anything() });
 
-    const connectBody = { connectionId: connectionId };
+    const connectBody = { connectionId: connectionId, passcode: passcode1 };
     req.body = connectBody;
     await httpHandler.createConnection(req, res);
 
@@ -213,7 +228,7 @@ describe('http signaling test in public mode', () => {
     req.body = offerBody;
     await httpHandler.postOffer(req, res);
 
-    const offer = { connectionId: connectionId, sdp: testsdp, datetime: expect.anything(), type: "offer", polite: false };
+    const offer = expect.objectContaining({ connectionId: connectionId, sdp: testsdp, datetime: expect.anything(), type: "offer", polite: false });
     await httpHandler.getAll(req, res);
     expect(res.json).toHaveBeenLastCalledWith({ messages: expect.not.arrayContaining([offer]), datetime: expect.anything() });
     await httpHandler.getAll(req2, res);
@@ -265,7 +280,7 @@ test('Timed out sessions are deleted when other sessions check', async () => {
   await httpHandler.getAll(req, res);
   expect(res.json).toHaveBeenLastCalledWith({ messages: [], datetime: expect.anything() });
 
-  const connectBody = { connectionId: connectionId };
+  const connectBody = { connectionId: connectionId, passcode: passcode1 };
   req.body = connectBody;
   await httpHandler.createConnection(req, res);
 
@@ -273,7 +288,7 @@ test('Timed out sessions are deleted when other sessions check', async () => {
   req.body = offerBody;
   await httpHandler.postOffer(req, res);
 
-  const offer = { connectionId: connectionId, sdp: testsdp, datetime: expect.anything(), type: "offer", polite: false };
+  const offer = expect.objectContaining({ connectionId: connectionId, sdp: testsdp, datetime: expect.anything(), type: "offer", polite: false });
   await httpHandler.getAll(req, res);
   expect(res.json).toHaveBeenLastCalledWith({ messages: expect.not.arrayContaining([offer]), datetime: expect.anything() });
   await httpHandler.getAll(req2, res);
@@ -314,6 +329,9 @@ describe('http signaling test in private mode', () => {
   const sessionId2 = "abcd5678";
   const connectionId = "12345";
   const testsdp = "test sdp";
+  const passcode1 = "HOSTBOT";
+  const passcode2 = "JOSH";
+  const passcode3 = "BIRD";
 
   const { res, next, mockClear } = getMockRes();
   const req = getMockReq({ header: jest.fn(() => sessionId) });
@@ -347,17 +365,27 @@ describe('http signaling test in private mode', () => {
   });
 
   test('create connection from session1', async () => {
-    const body = { connectionId: connectionId };
+    const body = { connectionId: connectionId, passcode: passcode1 };
     req.body = body;
     await httpHandler.createConnection(req, res);
-    expect(res.json).toHaveBeenCalledWith({ connectionId: connectionId, polite: false, datetime: expect.anything(), type: "connect" });
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      connectionId: connectionId,
+      polite: false,
+      type: "connect",
+      authProfile: expect.objectContaining({ passcodeId: "hostbot", role: "host", username: "hostbot" })
+    }));
   });
 
   test('create connection from session2', async () => {
-    const body = { connectionId: connectionId };
+    const body = { connectionId: connectionId, passcode: passcode2 };
     req2.body = body;
     await httpHandler.createConnection(req2, res);
-    expect(res.json).toHaveBeenCalledWith({ connectionId: connectionId, polite: true, datetime: expect.anything(), type: "connect" });
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      connectionId: connectionId,
+      polite: true,
+      type: "connect",
+      authProfile: expect.objectContaining({ passcodeId: "josh", role: "host", username: "josh" })
+    }));
   });
 
   test('response status 400 if connecctionId does not set', async () => {
@@ -370,7 +398,7 @@ describe('http signaling test in private mode', () => {
   test('response status 400 if aleady used connection', async () => {
     const sessionId3 = "session3";
     await httpHandler.createSession(sessionId3, res);
-    const body = { connectionId: connectionId };
+    const body = { connectionId: connectionId, passcode: passcode3 };
     const req3 = getMockReq({ header: jest.fn(() => sessionId3) });
     req3.body = body;
     await httpHandler.createConnection(req3, res);
@@ -397,7 +425,9 @@ describe('http signaling test in private mode', () => {
 
   test('get offer from session2', async () => {
     await httpHandler.getOffer(req2, res);
-    expect(res.json).toHaveBeenCalledWith({ offers: [{ connectionId: connectionId, sdp: testsdp, polite: true, datetime: expect.anything(), type: "offer" }] });
+    expect(res.json).toHaveBeenCalledWith({
+      offers: [expect.objectContaining({ connectionId: connectionId, sdp: testsdp, polite: true, datetime: expect.anything(), type: "offer" })]
+    });
   });
 
   test('post answer from session2', async () => {
@@ -474,17 +504,16 @@ describe('http signaling test in private mode', () => {
     await httpHandler.getAll(req, res);
     expect(res.json).toHaveBeenLastCalledWith({ messages: [], datetime: expect.anything() });
 
-    const connectBody = { connectionId: connectionId };
-    req.body = connectBody;
+    req.body = { connectionId: connectionId, passcode: passcode1 };
     await httpHandler.createConnection(req, res);
-    req2.body = connectBody;
+    req2.body = { connectionId: connectionId, passcode: passcode2 };
     await httpHandler.createConnection(req2, res);
 
     const offerBody = { connectionId: connectionId, sdp: testsdp, datetime: expect.anything(), type: "offer" };
     req.body = offerBody;
     await httpHandler.postOffer(req, res);
 
-    const offer = { connectionId: connectionId, sdp: testsdp, datetime: expect.anything(), type: "offer", polite: true };
+    const offer = expect.objectContaining({ connectionId: connectionId, sdp: testsdp, datetime: expect.anything(), type: "offer", polite: true });
     await httpHandler.getAll(req, res);
     expect(res.json).toHaveBeenLastCalledWith({ messages: expect.not.arrayContaining([offer]), datetime: expect.anything() });
     await httpHandler.getAll(req2, res);
@@ -500,7 +529,7 @@ describe('http signaling test in private mode', () => {
     req2.body = answerBody;
     await httpHandler.postAnswer(req2, res);
 
-    const disconnect = { connectionId: connectionId, type: "disconnect", datetime: expect.anything() };
+    const disconnect = expect.objectContaining({ connectionId: connectionId, type: "disconnect", datetime: expect.anything() });
     await httpHandler.getAll(req2, res);
     expect(res.json).toHaveBeenLastCalledWith({ messages: expect.arrayContaining([disconnect]), datetime: expect.anything() });
 

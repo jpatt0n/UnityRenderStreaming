@@ -1,0 +1,36 @@
+{
+  "profiles": [
+    {
+      "passcode": "HOSTBOT",
+      "passcodeId": "hostbot",
+      "role": "host",
+      "defaultUsername": "hostbot",
+      "characterDescription": "A steady host who keeps sessions moving clearly and calmly.",
+      "enabled": true
+    },
+    {
+      "passcode": "JOSH",
+      "passcodeId": "josh",
+      "role": "host",
+      "defaultUsername": "josh",
+      "characterDescription": "An energetic host who drives momentum and quick decisions.",
+      "enabled": true
+    },
+    {
+      "passcode": "BIRD",
+      "passcodeId": "bird",
+      "role": "host",
+      "defaultUsername": "bird",
+      "characterDescription": "A reflective host who stays observant and detail-oriented.",
+      "enabled": true
+    },
+    {
+      "passcode": "TESTGUEST",
+      "passcodeId": "testguest",
+      "role": "host",
+      "defaultUsername": "testguest",
+      "characterDescription": "A flexible test host profile for validation and troubleshooting.",
+      "enabled": true
+    }
+  ]
+}

@@ -10,6 +10,18 @@ namespace Unity.RenderStreaming
         public string sdp;
         public string type;
         public bool polite;
+        public AuthProfileData authProfile;
+    }
+
+    [Serializable]
+    public class AuthProfileData
+    {
+        public string passcodeId;
+        public string role;
+        public string username;
+        public string bodyType;
+        public string modelTypeDto;
+        public string characterDescription;
     }
 
     [Serializable]
@@ -34,6 +46,7 @@ namespace Unity.RenderStreaming
         public string candidate;
         public string sdpMid;
         public int sdpMLineIndex;
+        public AuthProfileData authProfile;
     }
 
     [Serializable]
@@ -56,6 +69,7 @@ namespace Unity.RenderStreaming
     {
         public string connectionId;
         public bool polite;
+        public AuthProfileData authProfile;
     }
 
     [Serializable]

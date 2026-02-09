@@ -45,7 +45,8 @@
   "pkg": {
     "assets": [
       "client/public/**/*",
-      "client/src/**/*"
+      "client/src/**/*",
+      "config/auth-passcodes.json"
     ],
     "targets": [
       "node10"

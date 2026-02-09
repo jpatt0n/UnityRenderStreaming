@@ -13,6 +13,24 @@ function getWebSocketUrl() {
   return url.toString();
 }
 
+function extractErrorMessage(payload, fallback = "request failed") {
+  if (!payload) {
+    return fallback;
+  }
+  if (typeof payload.message === "string" && payload.message.trim() !== "") {
+    return payload.message;
+  }
+  if (payload.error) {
+    if (typeof payload.error === "string" && payload.error.trim() !== "") {
+      return payload.error;
+    }
+    if (typeof payload.error.message === "string" && payload.error.message.trim() !== "") {
+      return payload.error.message;
+    }
+  }
+  return fallback;
+}
+
 export class Signaling extends EventTarget {
 
   constructor(interval = 1000) {
@@ -98,10 +116,17 @@ export class Signaling extends EventTarget {
     this.sessionId = null;
   }
 
-  async createConnection(connectionId) {
-    const data = { 'connectionId': connectionId };
+  async createConnection(connectionId, auth = {}) {
+    const data = {
+      'connectionId': connectionId,
+      'passcode': auth.passcode,
+      'usernameHint': auth.usernameHint
+    };
     const res = await fetch(this.url('connection'), { method: 'PUT', headers: this.headers(), body: JSON.stringify(data) });
-    const json = await res.json();
+    const json = await res.json().catch(() => null);
+    if (!res.ok) {
+      throw new Error(extractErrorMessage(json, `createConnection failed (${res.status})`));
+    }
     Logger.log(`Signaling: HTTP create connection, connectionId: ${json.connectionId}, polite:${json.polite}`);
 
     this.dispatchEvent(new CustomEvent('connect', { detail: json }));
@@ -150,6 +175,7 @@ export class WebSocketSignaling extends EventTarget {
     super();
     this.interval = interval;
     this.sleep = msec => new Promise(resolve => setTimeout(resolve, msec));
+    this.pendingConnects = new Map();
 
     const websocketUrl = getWebSocketUrl();
     this.websocket = new WebSocket(websocketUrl);
@@ -173,13 +199,25 @@ export class WebSocketSignaling extends EventTarget {
 
       switch (msg.type) {
         case "connect":
+          this._resolvePendingConnect(msg);
           this.dispatchEvent(new CustomEvent('connect', { detail: msg }));
           break;
         case "disconnect":
           this.dispatchEvent(new CustomEvent('disconnect', { detail: msg }));
           break;
+        case "error":
+          this._rejectPendingConnect(msg);
+          this.dispatchEvent(new CustomEvent('error', { detail: msg }));
+          break;
         case "offer":
-          this.dispatchEvent(new CustomEvent('offer', { detail: { connectionId: msg.from, sdp: msg.data.sdp, polite: msg.data.polite } }));
+          this.dispatchEvent(new CustomEvent('offer', {
+            detail: {
+              connectionId: msg.from,
+              sdp: msg.data.sdp,
+              polite: msg.data.polite,
+              authProfile: msg.data.authProfile
+            }
+          }));
           break;
         case "answer":
           this.dispatchEvent(new CustomEvent('answer', { detail: { connectionId: msg.from, sdp: msg.data.sdp } }));
@@ -200,16 +238,71 @@ export class WebSocketSignaling extends EventTarget {
   }
 
   async stop() {
+    for (const [_id, pending] of this.pendingConnects) {
+      clearTimeout(pending.timer);
+      pending.reject(new Error('Signaling websocket closed'));
+    }
+    this.pendingConnects.clear();
     this.websocket.close();
     while (this.isWsOpen) {
       await this.sleep(100);
     }
   }
 
-  createConnection(connectionId) {
-    const sendJson = JSON.stringify({ type: "connect", connectionId: connectionId });
-    Logger.log(sendJson);
-    this.websocket.send(sendJson);
+  createConnection(connectionId, auth = {}) {
+    return new Promise((resolve, reject) => {
+      this.connectionId = connectionId;
+      const existing = this.pendingConnects.get(connectionId);
+      if (existing) {
+        clearTimeout(existing.timer);
+        existing.reject(new Error('Connection request superseded by a newer attempt.'));
+      }
+
+      const timer = setTimeout(() => {
+        this.pendingConnects.delete(connectionId);
+        reject(new Error('Timed out waiting for signaling connect acknowledgement.'));
+      }, 8000);
+
+      this.pendingConnects.set(connectionId, { resolve, reject, timer });
+      const sendJson = JSON.stringify({
+        type: "connect",
+        connectionId: connectionId,
+        passcode: auth.passcode,
+        usernameHint: auth.usernameHint
+      });
+      Logger.log(sendJson);
+      this.websocket.send(sendJson);
+    });
+  }
+
+  _resolvePendingConnect(msg) {
+    const pending = this.pendingConnects.get(msg.connectionId);
+    if (!pending) {
+      return;
+    }
+    clearTimeout(pending.timer);
+    this.pendingConnects.delete(msg.connectionId);
+    pending.resolve(msg);
+  }
+
+  _rejectPendingConnect(msg) {
+    const connectionId = msg.connectionId || this.connectionId;
+    if (connectionId && this.pendingConnects.has(connectionId)) {
+      const pending = this.pendingConnects.get(connectionId);
+      clearTimeout(pending.timer);
+      this.pendingConnects.delete(connectionId);
+      pending.reject(new Error(extractErrorMessage(msg, 'Signaling connection rejected.')));
+      return;
+    }
+
+    // If server does not include a connectionId, reject the oldest pending request.
+    const first = this.pendingConnects.entries().next();
+    if (!first.done) {
+      const [id, pending] = first.value;
+      clearTimeout(pending.timer);
+      this.pendingConnects.delete(id);
+      pending.reject(new Error(extractErrorMessage(msg, 'Signaling connection rejected.')));
+    }
   }
 
   deleteConnection(connectionId) {

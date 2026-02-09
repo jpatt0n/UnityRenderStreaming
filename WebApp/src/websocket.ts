@@ -38,7 +38,7 @@ export default class WSSignaling {
 
         switch (msg.type) {
           case "connect":
-            handler.onConnect(ws, msg.connectionId);
+            handler.onConnect(ws, msg.connectionId, msg.passcode, msg.usernameHint);
             break;
           case "disconnect":
             handler.onDisconnect(ws, msg.connectionId);

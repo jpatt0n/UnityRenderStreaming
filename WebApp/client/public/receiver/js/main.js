@@ -33,7 +33,9 @@ const webcamPreviewPlaceholder = document.getElementById('webcamPreviewPlacehold
 
 const playerDiv = document.getElementById('player');
 const lockMouseCheck = document.getElementById('lockMouseCheck');
+const passcodeInput = document.getElementById('passcodeInput');
 const usernameInput = document.getElementById('usernameInput');
+const rememberPasscodeCheck = document.getElementById('rememberPasscodeCheck');
 const micCheck = document.getElementById('micCheck');
 const audioSelect = document.querySelector('select#audioSource');
 const videoPlayer = new VideoPlayer();
@@ -111,6 +113,8 @@ async function setup() {
   await setupAudioInputSelect();
   await setupVideoInputSelect();
   restoreUsername();
+  restorePasscode();
+  applyUrlPrefill();
   updateMicState();
   updateWebcamState();
   if (settingsMenu) {
@@ -171,12 +175,21 @@ function showWarningIfNeeded(startupMode) {
 }
 
 function onClickJoinButton() {
-  const username = sanitizeUsername(usernameInput.value);
-  if (!username) {
-    setStatusMessage('Please enter a username to connect.');
+  if (!passcodeInput) {
+    setStatusMessage('Passcode field is unavailable.');
     return;
   }
+
+  const passcode = sanitizePasscode(passcodeInput.value);
+  if (!passcode) {
+    setStatusMessage('Please enter a passcode to connect.');
+    return;
+  }
+  passcodeInput.value = passcode;
+
+  const username = sanitizeUsername(usernameInput.value);
   usernameInput.value = username;
+  savePasscode(passcode);
   saveUsername(username);
   setStatusMessage('');
 
@@ -192,31 +205,37 @@ function onClickJoinButton() {
   if (webcamCheck && webcamCheck.checked) {
     void startWebcam();
   }
-  setupRenderStreaming();
+  void setupRenderStreaming({ passcode, usernameHint: username });
 }
 
 async function onClickDisconnectButton() {
   await teardownConnection('Disconnected.');
 }
 
-async function setupRenderStreaming() {
+async function setupRenderStreaming(auth) {
   codecPreferences.disabled = true;
+  try {
+    const signaling = useWebSocket ? new WebSocketSignaling() : new Signaling();
+    const config = getRTCConfiguration();
+    renderstreaming = new RenderStreaming(signaling, config);
+    renderstreaming.onConnect = onConnect;
+    renderstreaming.onDisconnect = onDisconnect;
+    renderstreaming.onError = (message) => {
+      void teardownConnection(`Unable to join: ${message}`);
+    };
+    renderstreaming.onTrackEvent = (data) => videoPlayer.addTrack(data.track);
+    renderstreaming.onGotOffer = setCodecPreferences;
 
-  const signaling = useWebSocket ? new WebSocketSignaling() : new Signaling();
-  const config = getRTCConfiguration();
-  renderstreaming = new RenderStreaming(signaling, config);
-  renderstreaming.onConnect = onConnect;
-  renderstreaming.onDisconnect = onDisconnect;
-  renderstreaming.onTrackEvent = (data) => videoPlayer.addTrack(data.track);
-  renderstreaming.onGotOffer = setCodecPreferences;
-
-  await renderstreaming.start();
-  const username = sanitizeUsername(usernameInput.value);
-  const connectionId = createConnectionId(username);
-  await renderstreaming.createConnection(connectionId);
+    await renderstreaming.start();
+    const username = sanitizeUsername(usernameInput.value);
+    const connectionId = createConnectionId(username);
+    await renderstreaming.createConnection(connectionId, auth);
+  } catch (err) {
+    await teardownConnection(`Unable to join: ${err.message || err}`);
+  }
 }
 
-async function onConnect() {
+async function onConnect(_connectionId, authProfile, reason) {
   const channel = renderstreaming.createDataChannel("input");
   videoPlayer.setupInput(channel);
   if (micCheck && micCheck.checked) {
@@ -225,12 +244,20 @@ async function onConnect() {
   if (webcamCheck && webcamCheck.checked) {
     await startWebcam();
   }
-  setStatusMessage('');
+  if (authProfile && typeof authProfile.username === 'string') {
+    usernameInput.value = sanitizeUsername(authProfile.username);
+    saveUsername(usernameInput.value);
+  }
+  setStatusMessage(reason === 'replaced_existing_session' ? 'Reconnected and replaced the previous session.' : '');
   setUiState('connected');
   showStatsMessage();
 }
 
-async function onDisconnect(connectionId) {
+async function onDisconnect(connectionId, reason) {
+  if (reason === 'replaced_by_new_session') {
+    await teardownConnection('Disconnected because this passcode joined from another session.');
+    return;
+  }
   const display = typeof connectionId === 'string' ? connectionId : 'session';
   const message = display.startsWith('Receive disconnect message') ? 'Disconnected.' : `Disconnected from ${display}.`;
   await teardownConnection(message);
@@ -528,6 +555,10 @@ function sanitizeUsername(value) {
   return (value || '').trim().toLowerCase().replace(/[^a-z]/g, '');
 }
 
+function sanitizePasscode(value) {
+  return (value || '').trim().toUpperCase();
+}
+
 function restoreUsername() {
   const saved = window.localStorage.getItem('lg_username') || '';
   if (saved) {
@@ -540,6 +571,59 @@ function restoreUsername() {
 
 function saveUsername(value) {
   window.localStorage.setItem('lg_username', value);
+}
+
+function restorePasscode() {
+  if (rememberPasscodeCheck) {
+    rememberPasscodeCheck.checked = window.localStorage.getItem('lg_remember_passcode') === 'true';
+    rememberPasscodeCheck.addEventListener('change', () => {
+      savePasscode(passcodeInput.value);
+    });
+  }
+
+  if (passcodeInput) {
+    if (rememberPasscodeCheck && rememberPasscodeCheck.checked) {
+      const saved = window.localStorage.getItem('lg_passcode') || '';
+      if (saved) {
+        passcodeInput.value = sanitizePasscode(saved);
+      }
+    }
+    passcodeInput.addEventListener('input', () => {
+      passcodeInput.value = sanitizePasscode(passcodeInput.value);
+      if (rememberPasscodeCheck && rememberPasscodeCheck.checked) {
+        window.localStorage.setItem('lg_passcode', passcodeInput.value);
+      }
+    });
+  }
+}
+
+function savePasscode(value) {
+  if (!rememberPasscodeCheck) {
+    return;
+  }
+
+  window.localStorage.setItem('lg_remember_passcode', rememberPasscodeCheck.checked ? 'true' : 'false');
+  if (rememberPasscodeCheck.checked) {
+    window.localStorage.setItem('lg_passcode', sanitizePasscode(value));
+  } else {
+    window.localStorage.removeItem('lg_passcode');
+  }
+}
+
+function applyUrlPrefill() {
+  const params = new URLSearchParams(window.location.search);
+  const passcode = sanitizePasscode(params.get('passcode') || '');
+  const username = sanitizeUsername(params.get('username') || '');
+
+  if (passcode && passcodeInput) {
+    passcodeInput.value = passcode;
+    savePasscode(passcode);
+  }
+
+  if (username && usernameInput) {
+    usernameInput.value = username;
+    saveUsername(username);
+  }
 }
 
 /** @type {RTCStatsReport} */

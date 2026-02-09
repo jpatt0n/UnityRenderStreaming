@@ -18,6 +18,7 @@ export class RenderStreaming {
     this._connectionId = null;
     this.onConnect = function (connectionId) { Logger.log(`Connect peer on ${connectionId}.`); };
     this.onDisconnect = function (connectionId) { Logger.log(`Disconnect peer on ${connectionId}.`); };
+    this.onError = function (message) { Logger.log(`Signaling error: ${message}`); };
     this.onGotOffer = function (connectionId) { Logger.log(`On got Offer on ${connectionId}.`); };
     this.onGotAnswer = function (connectionId) { Logger.log(`On got Answer on ${connectionId}.`); };
     this.onTrackEvent = function (data) { Logger.log(`OnTrack event peer with data:${data}`); };
@@ -30,25 +31,31 @@ export class RenderStreaming {
     this._signaling.addEventListener('offer', this._onOffer.bind(this));
     this._signaling.addEventListener('answer', this._onAnswer.bind(this));
     this._signaling.addEventListener('candidate', this._onIceCandidate.bind(this));
+    this._signaling.addEventListener('error', this._onError.bind(this));
   }
 
   async _onConnect(e) {
     const data = e.detail;
     if (this._connectionId == data.connectionId) {
       this._preparePeerConnection(this._connectionId, data.polite);
-      this.onConnect(data.connectionId);
+      this.onConnect(data.connectionId, data.authProfile, data.reason);
     }
   }
 
   async _onDisconnect(e) {
     const data = e.detail;
     if (this._connectionId == data.connectionId) {
-      this.onDisconnect(data.connectionId);
+      this.onDisconnect(data.connectionId, data.reason);
       if (this._peer) {
         this._peer.close();
         this._peer = null;
       }
     }
+  }
+
+  async _onError(e) {
+    const data = e.detail || {};
+    this.onError(data.message || "Signaling error");
   }
 
   async _onOffer(e) {
@@ -90,9 +97,9 @@ export class RenderStreaming {
    * if not set argument, a generated uuid is used.
    * @param {string | null} connectionId
    */
-  async createConnection(connectionId) {
+  async createConnection(connectionId, auth = {}) {
     this._connectionId = connectionId ? connectionId : uuid4();
-    await this._signaling.createConnection(this._connectionId);
+    await this._signaling.createConnection(this._connectionId, auth);
   }
 
   async deleteConnection() {
