@@ -38,8 +38,39 @@ const micCheck = document.getElementById('micCheck');
 const audioSelect = document.querySelector('select#audioSource');
 const videoPlayer = new VideoPlayer();
 let webcamTransceiver = null;
+let micTransceiver = null;
 let localVideoStream = null;
 let localVideoTrack = null;
+let microphonePipeline = null;
+
+const DEFAULT_GTCRN_ASSETS_BASE_URL = new URL('../gtcrn/', import.meta.url).toString();
+const globalConfig = window.RENDER_STREAMING_CONFIG || {};
+let gtcrnRuntimePromise = null;
+const loadedScriptPromises = new Map();
+
+const gtcrnConfig = (() => {
+  const gtcrn = globalConfig.gtcrn || {};
+  const wasmBaseUrl = ensureTrailingSlash(
+    typeof gtcrn.assetsBaseUrl === 'string' && gtcrn.assetsBaseUrl
+      ? gtcrn.assetsBaseUrl
+      : DEFAULT_GTCRN_ASSETS_BASE_URL
+  );
+
+  return {
+    enabled: gtcrn.enabled !== false,
+    debug: Number.isInteger(gtcrn.debug) ? gtcrn.debug : 0,
+    numThreads: Number.isInteger(gtcrn.numThreads) && gtcrn.numThreads > 0 ? gtcrn.numThreads : 1,
+    provider: typeof gtcrn.provider === 'string' && gtcrn.provider ? gtcrn.provider : 'cpu',
+    modelPath: typeof gtcrn.modelPath === 'string' ? gtcrn.modelPath.trim() : '',
+    wasmBaseUrl,
+    wasmMainScriptUrl: typeof gtcrn.wasmMainScriptUrl === 'string' && gtcrn.wasmMainScriptUrl
+      ? gtcrn.wasmMainScriptUrl
+      : `${wasmBaseUrl}sherpa-onnx-wasm-main-speech-enhancement.js`,
+    speechEnhancementScriptUrl: typeof gtcrn.speechEnhancementScriptUrl === 'string' && gtcrn.speechEnhancementScriptUrl
+      ? gtcrn.speechEnhancementScriptUrl
+      : `${wasmBaseUrl}sherpa-onnx-speech-enhancement.js`
+  };
+})();
 
 setup();
 
@@ -252,6 +283,7 @@ async function teardownConnection(message) {
   videoPlayer.deletePlayer();
   stopMicrophone();
   stopWebcam();
+  micTransceiver = null;
   webcamTransceiver = null;
   if (supportsSetCodecPreferences) {
     codecPreferences.disabled = false;
@@ -361,6 +393,258 @@ function updateWebcamState() {
   }
 }
 
+function ensureTrailingSlash(url) {
+  return url.endsWith('/') ? url : `${url}/`;
+}
+
+function ignoreError() {}
+
+function loadScriptOnce(src) {
+  if (loadedScriptPromises.has(src)) {
+    return loadedScriptPromises.get(src);
+  }
+
+  const promise = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = src;
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error(`Failed to load script: ${src}`));
+    document.head.appendChild(script);
+  });
+  loadedScriptPromises.set(src, promise);
+  return promise;
+}
+
+async function getGtcrnRuntime() {
+  if (gtcrnRuntimePromise) {
+    return gtcrnRuntimePromise;
+  }
+
+  gtcrnRuntimePromise = (async () => {
+    if (
+      typeof window.createOfflineSpeechDenoiser === 'function' &&
+      window.Module &&
+      (window.Module.__gtcrnRuntimeReady === true || window.Module.calledRun === true)
+    ) {
+      return { Module: window.Module, createOfflineSpeechDenoiser: window.createOfflineSpeechDenoiser };
+    }
+
+    let readyTimeout = null;
+    const module = window.Module || {};
+    window.Module = module;
+    module.locateFile = (path) => new URL(path, gtcrnConfig.wasmBaseUrl).toString();
+    const runtimeReady = new Promise((resolve, reject) => {
+      readyTimeout = window.setTimeout(() => {
+        reject(new Error('Timed out waiting for GTCRN WebAssembly runtime initialization.'));
+      }, 60000);
+      module.onRuntimeInitialized = () => {
+        if (readyTimeout) {
+          clearTimeout(readyTimeout);
+          readyTimeout = null;
+        }
+        module.__gtcrnRuntimeReady = true;
+        resolve();
+      };
+      module.onAbort = (reason) => {
+        if (readyTimeout) {
+          clearTimeout(readyTimeout);
+          readyTimeout = null;
+        }
+        reject(new Error(`GTCRN WebAssembly aborted: ${reason || 'unknown reason'}`));
+      };
+    });
+
+    await loadScriptOnce(gtcrnConfig.speechEnhancementScriptUrl);
+    await loadScriptOnce(gtcrnConfig.wasmMainScriptUrl);
+    await runtimeReady;
+
+    if (typeof window.createOfflineSpeechDenoiser !== 'function') {
+      throw new Error('GTCRN runtime loaded, but createOfflineSpeechDenoiser is unavailable.');
+    }
+
+    return { Module: module, createOfflineSpeechDenoiser: window.createOfflineSpeechDenoiser };
+  })().catch((err) => {
+    gtcrnRuntimePromise = null;
+    throw err;
+  });
+
+  return gtcrnRuntimePromise;
+}
+
+function appendFloat32(existing, chunk) {
+  if (!chunk || chunk.length === 0) {
+    return existing;
+  }
+  if (!existing || existing.length === 0) {
+    return chunk;
+  }
+  const merged = new Float32Array(existing.length + chunk.length);
+  merged.set(existing, 0);
+  merged.set(chunk, existing.length);
+  return merged;
+}
+
+function popFloat32(existing, count) {
+  if (!existing || existing.length === 0 || count <= 0) {
+    return [new Float32Array(0), existing || new Float32Array(0)];
+  }
+
+  if (existing.length <= count) {
+    return [existing, new Float32Array(0)];
+  }
+
+  return [existing.subarray(0, count), existing.subarray(count)];
+}
+
+function resampleFloat32Linear(samples, fromRate, toRate) {
+  if (!samples || samples.length === 0 || fromRate <= 0 || toRate <= 0 || fromRate === toRate) {
+    return samples;
+  }
+
+  const ratio = toRate / fromRate;
+  const outputLength = Math.max(1, Math.round(samples.length * ratio));
+  const output = new Float32Array(outputLength);
+
+  for (let i = 0; i < outputLength; i++) {
+    const sourcePos = i / ratio;
+    const leftIndex = Math.floor(sourcePos);
+    const rightIndex = Math.min(leftIndex + 1, samples.length - 1);
+    const frac = sourcePos - leftIndex;
+    const left = samples[leftIndex];
+    const right = samples[rightIndex];
+    output[i] = left + (right - left) * frac;
+  }
+
+  return output;
+}
+
+function getPreferredInputSampleRate(inputStream) {
+  const track = inputStream?.getAudioTracks?.()[0];
+  const settings = track?.getSettings?.();
+  const rate = settings?.sampleRate;
+  if (Number.isFinite(rate) && rate >= 8000 && rate <= 192000) {
+    return rate;
+  }
+  return null;
+}
+
+async function createGtcrnPipeline(inputStream) {
+  const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextCtor) {
+    throw new Error('AudioContext not supported.');
+  }
+
+  const runtime = await getGtcrnRuntime();
+  const denoiser = gtcrnConfig.modelPath
+    ? runtime.createOfflineSpeechDenoiser(runtime.Module, {
+      model: {
+        gtcrn: {
+          model: gtcrnConfig.modelPath
+        },
+        numThreads: gtcrnConfig.numThreads,
+        provider: gtcrnConfig.provider,
+        debug: gtcrnConfig.debug
+      }
+    })
+    : runtime.createOfflineSpeechDenoiser(runtime.Module);
+  if (!denoiser || typeof denoiser.run !== 'function') {
+    throw new Error('Unable to create GTCRN denoiser.');
+  }
+
+  const preferredRate = getPreferredInputSampleRate(inputStream);
+  let context = null;
+  if (preferredRate) {
+    try {
+      context = new AudioContextCtor({ sampleRate: preferredRate, latencyHint: 'interactive' });
+    } catch (err) {
+      ignoreError(err);
+      context = new AudioContextCtor();
+    }
+  } else {
+    context = new AudioContextCtor();
+  }
+  const sourceNode = context.createMediaStreamSource(inputStream);
+  const processorNode = context.createScriptProcessor(4096, 1, 1);
+  const destinationNode = context.createMediaStreamDestination();
+  let pendingOutput = new Float32Array(0);
+  let disposed = false;
+
+  processorNode.onaudioprocess = (event) => {
+    if (disposed) {
+      return;
+    }
+
+    try {
+      const input = Float32Array.from(event.inputBuffer.getChannelData(0));
+      const result = denoiser.run(input, context.sampleRate);
+      const chunk = result && result.samples ? result.samples : input;
+      const denoisedRate = result && Number.isFinite(result.sampleRate) ? result.sampleRate : context.sampleRate;
+      const denoisedSamples = chunk instanceof Float32Array ? chunk : Float32Array.from(chunk);
+      const samples = resampleFloat32Linear(denoisedSamples, denoisedRate, context.sampleRate);
+      pendingOutput = appendFloat32(pendingOutput, samples);
+    } catch (err) {
+      const fallback = Float32Array.from(event.inputBuffer.getChannelData(0));
+      pendingOutput = appendFloat32(pendingOutput, fallback);
+      console.warn('GTCRN processing error; falling back to raw frame.', err);
+    }
+
+    const output = event.outputBuffer.getChannelData(0);
+    output.fill(0);
+    const [samples, rest] = popFloat32(pendingOutput, output.length);
+    pendingOutput = rest;
+    if (samples.length > 0) {
+      output.set(samples, 0);
+    }
+  };
+
+  sourceNode.connect(processorNode);
+  processorNode.connect(destinationNode);
+  await context.resume();
+
+  const processedTrack = destinationNode.stream.getAudioTracks()[0];
+  if (!processedTrack) {
+    processorNode.disconnect();
+    sourceNode.disconnect();
+    denoiser.free?.();
+    await context.close();
+    throw new Error('GTCRN did not produce an output track.');
+  }
+
+  return {
+    track: processedTrack,
+    cleanup: async () => {
+      disposed = true;
+      processorNode.onaudioprocess = null;
+      try {
+        sourceNode.disconnect();
+      } catch (err) {
+        ignoreError(err);
+      }
+      try {
+        processorNode.disconnect();
+      } catch (err) {
+        ignoreError(err);
+      }
+      try {
+        destinationNode.disconnect();
+      } catch (err) {
+        ignoreError(err);
+      }
+      try {
+        denoiser.free?.();
+      } catch (err) {
+        ignoreError(err);
+      }
+      try {
+        await context.close();
+      } catch (err) {
+        ignoreError(err);
+      }
+    }
+  };
+}
+
 let localAudioStream = null;
 let localAudioTrack = null;
 
@@ -371,6 +655,9 @@ async function startMicrophone() {
 
   if (localAudioTrack && localAudioTrack.readyState === 'live') {
     localAudioTrack.enabled = true;
+    if (microphonePipeline && microphonePipeline.sourceTrack) {
+      microphonePipeline.sourceTrack.enabled = true;
+    }
     return;
   }
 
@@ -379,7 +666,8 @@ async function startMicrophone() {
     audio: {
       deviceId: audioSelect && audioSelect.value ? { exact: audioSelect.value } : undefined,
       echoCancellation: supported.echoCancellation ? true : undefined,
-      noiseSuppression: supported.noiseSuppression ? true : undefined
+      noiseSuppression: supported.noiseSuppression ? true : undefined,
+      autoGainControl: supported.autoGainControl ? true : undefined
     }
   };
 
@@ -397,13 +685,58 @@ async function startMicrophone() {
     return;
   }
 
-  renderstreaming.addTransceiver(localAudioTrack, { direction: 'sendonly' });
+  const sourceTrack = localAudioTrack;
+  let cleanup = null;
+
+  if (gtcrnConfig.enabled) {
+    try {
+      const pipeline = await createGtcrnPipeline(localAudioStream);
+      localAudioTrack = pipeline.track;
+      cleanup = pipeline.cleanup;
+      console.info('GTCRN enabled for microphone.');
+    } catch (err) {
+      console.warn('GTCRN setup failed; using browser microphone track.', err);
+    }
+  }
+
+  microphonePipeline = {
+    sourceTrack,
+    cleanup
+  };
+
+  if (micTransceiver && micTransceiver.sender) {
+    try {
+      await micTransceiver.sender.replaceTrack(localAudioTrack);
+      return;
+    } catch (err) {
+      // fall through to create a new transceiver
+    }
+  }
+
+  micTransceiver = renderstreaming.addTransceiver(localAudioTrack, { direction: 'sendonly' });
 }
 
 function stopMicrophone() {
+  if (micTransceiver && micTransceiver.sender) {
+    micTransceiver.sender.replaceTrack(null).catch(() => {});
+  }
+
+  if (microphonePipeline && typeof microphonePipeline.cleanup === 'function') {
+    Promise.resolve(microphonePipeline.cleanup()).catch(() => {});
+  }
+  microphonePipeline = null;
+
   if (localAudioTrack) {
+    localAudioTrack.enabled = false;
     localAudioTrack.stop();
     localAudioTrack = null;
+  }
+  if (localAudioStream) {
+    localAudioStream.getTracks().forEach((track) => {
+      if (track.readyState === 'live') {
+        track.stop();
+      }
+    });
   }
   localAudioStream = null;
 }
@@ -495,6 +828,9 @@ if (micCheck) {
       await startMicrophone();
     } else if (localAudioTrack) {
       localAudioTrack.enabled = false;
+      if (microphonePipeline && microphonePipeline.sourceTrack) {
+        microphonePipeline.sourceTrack.enabled = false;
+      }
     }
   });
 }
