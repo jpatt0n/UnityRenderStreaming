@@ -1,8 +1,9 @@
-import { getServerConfig, getRTCConfiguration } from "../../js/config.js";
+import { getServerConfig, getRTCConfiguration, getRNNoiseConfiguration } from "../../js/config.js";
 import { createDisplayStringArray } from "../../js/stats.js";
 import { VideoPlayer } from "../../js/videoplayer.js";
 import { RenderStreaming } from "../../module/renderstreaming.js";
 import { Signaling, WebSocketSignaling } from "../../module/signaling.js";
+import { createRnnoiseProcessor } from "./rnnoise.js";
 
 /** @type {RenderStreaming} */
 let renderstreaming;
@@ -37,6 +38,7 @@ const usernameInput = document.getElementById('usernameInput');
 const micCheck = document.getElementById('micCheck');
 const audioSelect = document.querySelector('select#audioSource');
 const videoPlayer = new VideoPlayer();
+let micTransceiver = null;
 let webcamTransceiver = null;
 let localVideoStream = null;
 let localVideoTrack = null;
@@ -252,6 +254,7 @@ async function teardownConnection(message) {
   videoPlayer.deletePlayer();
   stopMicrophone();
   stopWebcam();
+  micTransceiver = null;
   webcamTransceiver = null;
   if (supportsSetCodecPreferences) {
     codecPreferences.disabled = false;
@@ -362,7 +365,43 @@ function updateWebcamState() {
 }
 
 let localAudioStream = null;
+let localAudioRawStream = null;
 let localAudioTrack = null;
+let rnnoiseProcessor = null;
+
+async function fallbackToRawMicrophoneTrack(reason) {
+  if (!localAudioRawStream) {
+    return;
+  }
+
+  const rawTrack = localAudioRawStream.getAudioTracks()[0];
+  if (!rawTrack || rawTrack.readyState !== 'live') {
+    return;
+  }
+
+  const activeProcessor = rnnoiseProcessor;
+  rnnoiseProcessor = null;
+  if (activeProcessor) {
+    await activeProcessor.close({ stopInputTrack: false }).catch(() => {});
+  }
+
+  localAudioTrack = rawTrack;
+  localAudioStream = localAudioRawStream;
+  localAudioTrack.enabled = micCheck ? micCheck.checked : true;
+
+  try {
+    await ensureMicrophoneTrackAttached();
+  } catch (err) {
+    setStatusMessage(`Microphone send error: ${err.message || err}`);
+    micCheck.checked = false;
+    updateMicState();
+    stopMicrophone();
+    return;
+  }
+
+  console.warn('[RNNoise] Falling back to direct microphone track:', reason);
+  setStatusMessage('RNNoise fallback active: using direct microphone audio.');
+}
 
 async function startMicrophone() {
   if (!renderstreaming) {
@@ -371,20 +410,29 @@ async function startMicrophone() {
 
   if (localAudioTrack && localAudioTrack.readyState === 'live') {
     localAudioTrack.enabled = true;
+    if (rnnoiseProcessor) {
+      rnnoiseProcessor.setEnabled(true);
+    }
+    await ensureMicrophoneTrackAttached();
     return;
   }
 
+  const rnnoiseConfig = getRNNoiseConfiguration();
   const supported = navigator.mediaDevices?.getSupportedConstraints?.() ?? {};
   const constraints = {
     audio: {
       deviceId: audioSelect && audioSelect.value ? { exact: audioSelect.value } : undefined,
       echoCancellation: supported.echoCancellation ? true : undefined,
-      noiseSuppression: supported.noiseSuppression ? true : undefined
+      noiseSuppression: supported.noiseSuppression ? (rnnoiseConfig.enabled ? false : true) : undefined,
+      autoGainControl: supported.autoGainControl ? false : undefined,
+      channelCount: supported.channelCount ? 1 : undefined,
+      sampleRate: supported.sampleRate ? 48000 : undefined,
+      sampleSize: supported.sampleSize ? 16 : undefined
     }
   };
 
   try {
-    localAudioStream = await navigator.mediaDevices.getUserMedia(constraints);
+    localAudioRawStream = await navigator.mediaDevices.getUserMedia(constraints);
   } catch (err) {
     setStatusMessage(`Microphone error: ${err.message || err}`);
     micCheck.checked = false;
@@ -392,19 +440,80 @@ async function startMicrophone() {
     return;
   }
 
-  localAudioTrack = localAudioStream.getAudioTracks()[0];
-  if (!localAudioTrack) {
+  const rawTrack = localAudioRawStream.getAudioTracks()[0];
+  if (!rawTrack) {
+    stopMicrophone();
     return;
   }
 
-  renderstreaming.addTransceiver(localAudioTrack, { direction: 'sendonly' });
+  localAudioTrack = rawTrack;
+  localAudioStream = localAudioRawStream;
+
+  if (rnnoiseConfig.enabled) {
+    try {
+      rnnoiseProcessor = await createRnnoiseProcessor(localAudioRawStream, rnnoiseConfig);
+      rnnoiseProcessor.setOnError((error) => {
+        void fallbackToRawMicrophoneTrack(error);
+      });
+      localAudioTrack = rnnoiseProcessor.getTrack();
+      localAudioStream = new MediaStream([localAudioTrack]);
+    } catch (err) {
+      await fallbackToRawMicrophoneTrack(err);
+    }
+  }
+
+  if (!localAudioTrack) {
+    stopMicrophone();
+    return;
+  }
+
+  try {
+    await ensureMicrophoneTrackAttached();
+  } catch (err) {
+    setStatusMessage(`Microphone send error: ${err.message || err}`);
+    micCheck.checked = false;
+    updateMicState();
+    stopMicrophone();
+  }
+}
+
+async function ensureMicrophoneTrackAttached() {
+  if (!renderstreaming || !localAudioTrack) {
+    return;
+  }
+
+  if (micTransceiver && micTransceiver.sender) {
+    try {
+      await micTransceiver.sender.replaceTrack(localAudioTrack);
+      return;
+    } catch (err) {
+      // fall through to create a new transceiver
+    }
+  }
+
+  micTransceiver = renderstreaming.addTransceiver(localAudioTrack, { direction: 'sendonly' });
 }
 
 function stopMicrophone() {
+  if (micTransceiver && micTransceiver.sender) {
+    micTransceiver.sender.replaceTrack(null).catch(() => {});
+  }
+
+  if (rnnoiseProcessor) {
+    void rnnoiseProcessor.close();
+    rnnoiseProcessor = null;
+  }
+
   if (localAudioTrack) {
     localAudioTrack.stop();
     localAudioTrack = null;
   }
+
+  if (localAudioRawStream) {
+    localAudioRawStream.getTracks().forEach(track => track.stop());
+    localAudioRawStream = null;
+  }
+
   localAudioStream = null;
 }
 
@@ -495,6 +604,9 @@ if (micCheck) {
       await startMicrophone();
     } else if (localAudioTrack) {
       localAudioTrack.enabled = false;
+      if (rnnoiseProcessor) {
+        rnnoiseProcessor.setEnabled(false);
+      }
     }
   });
 }

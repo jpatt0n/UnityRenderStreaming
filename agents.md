@@ -12,7 +12,8 @@
 - `WebApp/src/server.ts` — serves `/config` + `/signaling`, plus static assets under `/rs` and `/rs/module`.
 - `WebApp/client/public/` — static HTML/CSS/JS assets for the receiver UI.
 - `WebApp/client/src/` — ESM modules consumed by the receiver UI.
-- `WebApp/client/public/js/config.js`, `WebApp/client/src/signaling.js`, `WebApp/client/public/js/videoplayer.js` — read `window.RENDER_STREAMING_CONFIG` for `signalingBaseUrl`, `basePath`, and optional `iceServers`.
+- `WebApp/client/public/js/config.js`, `WebApp/client/src/signaling.js`, `WebApp/client/public/js/videoplayer.js` — read `window.RENDER_STREAMING_CONFIG` for `signalingBaseUrl`, `basePath`, optional `iceServers`, and optional `rnnoise` overrides (`enabled`, `preferSimd`, `workletPath`, `wasmPath`, `simdWasmPath`, `maxChannels`).
+- `WebApp/client/public/receiver/rnnoise/` — vendored RNNoise AudioWorklet + wasm assets used by receiver mic capture.
 
 ## Integration with Lawgiven + rs-portal
 - Lawgiven Unity runtime uses the RenderStreaming package and host components (`LGHostManager`, `LGHostRenderStreamingHandler`).
