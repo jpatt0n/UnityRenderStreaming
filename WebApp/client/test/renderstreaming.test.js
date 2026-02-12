@@ -66,6 +66,10 @@ describe.each([
     const channel = renderstreaming.createDataChannel(label);
     expect(channel.label).toBe(label);
 
+    const channelWithOptions = renderstreaming.createDataChannel("input", { ordered: false, maxRetransmits: 0 });
+    expect(channelWithOptions.label).toBe("input");
+    expect(channelWithOptions.options).toEqual({ ordered: false, maxRetransmits: 0 });
+
     let isDisconnect = false;
     renderstreaming.onDisconnect = () => isDisconnect = true;
     await renderstreaming.deleteConnection();

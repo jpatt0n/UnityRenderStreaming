@@ -225,7 +225,16 @@ export class Observer {
    *
    * @param {RTCDataChannel} channel
    */
-  constructor(channel) {
+  constructor(channel, maxBufferedAmount = 256 * 1024) {
+    this.channel = channel;
+    this.maxBufferedAmount = maxBufferedAmount;
+  }
+
+  /**
+   *
+   * @param {RTCDataChannel} channel
+   */
+  setChannel(channel) {
     this.channel = channel;
   }
   /**
@@ -234,6 +243,10 @@ export class Observer {
    */
   onNext(message) {
     if(this.channel == null || this.channel.readyState != 'open') {
+      return;
+    }
+    if (typeof this.channel.bufferedAmount === 'number'
+      && this.channel.bufferedAmount > this.maxBufferedAmount) {
       return;
     }
     this.channel.send(message.buffer);

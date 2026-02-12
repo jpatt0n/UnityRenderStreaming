@@ -153,8 +153,8 @@ export class RenderStreaming {
    * @param {string} label
    * @returns {RTCDataChannel | null}
    */
-  createDataChannel(label) {
-    return this._peer.createDataChannel(this._connectionId, label);
+  createDataChannel(label, options = undefined) {
+    return this._peer.createDataChannel(this._connectionId, label, options);
   }
 
   /**

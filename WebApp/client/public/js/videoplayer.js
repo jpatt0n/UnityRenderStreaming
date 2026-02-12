@@ -14,10 +14,13 @@ export class VideoPlayer {
     this.fullScreenButtonElement = null;
     this.inputRemoting = null;
     this.sender = null;
+    this.inputObserver = null;
     this.inputSenderChannel = null;
     this._onMouseMoveHandler = this._mouseMove.bind(this);
     this._onMouseClickFullScreenHandler = this._mouseClickFullScreen.bind(this);
     this._onFullscreenChangeHandler = this._onFullscreenChange.bind(this);
+    this._onOpenInputSenderChannelHandler = this._onOpenInputSenderChannel.bind(this);
+    this._onCloseInputSenderChannelHandler = this._onCloseInputSenderChannel.bind(this);
   }
 
   /**
@@ -184,11 +187,16 @@ export class VideoPlayer {
   }
 
   deletePlayer() {
+    this._setInputSenderChannel(null);
     if (this.inputRemoting) {
       this.inputRemoting.stopSending();
     }
     this.inputRemoting = null;
     this.sender = null;
+    if (this.inputObserver) {
+      this.inputObserver.setChannel(null);
+    }
+    this.inputObserver = null;
     this.inputSenderChannel = null;
 
     if (this.videoElement && this.videoElement.parentNode) {
@@ -215,30 +223,79 @@ export class VideoPlayer {
    * @param {RTCDataChannel} channel 
    */
   setupInput(channel) {
-    this.sender = new Sender(this.videoElement);
-    this.sender.addMouse();
-    this.sender.addKeyboard();
-    if (this._isTouchDevice()) {
-      this.sender.addTouchscreen();
+    if (!channel) {
+      return;
     }
-    this.sender.addGamepad();
-    this.inputRemoting = new InputRemoting(this.sender);
 
-    this.inputSenderChannel = channel;
-    this.inputSenderChannel.binaryType = 'arraybuffer';
-    if (this.inputSenderChannel.addEventListener) {
-      this.inputSenderChannel.addEventListener('open', this._onOpenInputSenderChannel.bind(this));
+    if (!this.sender) {
+      this.sender = new Sender(this.videoElement);
+      this.sender.addMouse();
+      this.sender.addKeyboard();
+      if (this._isTouchDevice()) {
+        this.sender.addTouchscreen();
+      }
+      this.sender.addGamepad();
+      this.inputRemoting = new InputRemoting(this.sender);
+      this.inputObserver = new Observer(channel);
+      this.inputRemoting.subscribe(this.inputObserver);
+    } else if (this.inputObserver) {
+      this.inputObserver.setChannel(channel);
     } else {
-      this.inputSenderChannel.onopen = this._onOpenInputSenderChannel.bind(this);
+      this.inputObserver = new Observer(channel);
+      this.inputRemoting.subscribe(this.inputObserver);
     }
-    this.inputRemoting.subscribe(new Observer(this.inputSenderChannel));
+
+    this._setInputSenderChannel(channel);
     if (this.inputSenderChannel.readyState === 'open') {
       this._onOpenInputSenderChannel();
     }
   }
 
+  _setInputSenderChannel(channel) {
+    if (this.inputSenderChannel === channel) {
+      return;
+    }
+    if (this.inputSenderChannel) {
+      if (this.inputSenderChannel.removeEventListener) {
+        this.inputSenderChannel.removeEventListener('open', this._onOpenInputSenderChannelHandler);
+        this.inputSenderChannel.removeEventListener('close', this._onCloseInputSenderChannelHandler);
+      } else {
+        if (this.inputSenderChannel.onopen === this._onOpenInputSenderChannelHandler) {
+          this.inputSenderChannel.onopen = null;
+        }
+        if (this.inputSenderChannel.onclose === this._onCloseInputSenderChannelHandler) {
+          this.inputSenderChannel.onclose = null;
+        }
+      }
+    }
+
+    this.inputSenderChannel = channel;
+    if (!this.inputSenderChannel) {
+      return;
+    }
+
+    this.inputSenderChannel.binaryType = 'arraybuffer';
+    if (this.inputSenderChannel.addEventListener) {
+      this.inputSenderChannel.addEventListener('open', this._onOpenInputSenderChannelHandler);
+      this.inputSenderChannel.addEventListener('close', this._onCloseInputSenderChannelHandler);
+    } else {
+      this.inputSenderChannel.onopen = this._onOpenInputSenderChannelHandler;
+      this.inputSenderChannel.onclose = this._onCloseInputSenderChannelHandler;
+    }
+  }
+
   async _onOpenInputSenderChannel() {
+    if (!this.inputRemoting) {
+      return;
+    }
     await new Promise(resolve => setTimeout(resolve, 100));
     this.inputRemoting.startSending();
+  }
+
+  _onCloseInputSenderChannel() {
+    if (!this.inputRemoting) {
+      return;
+    }
+    this.inputRemoting.stopSending();
   }
 }

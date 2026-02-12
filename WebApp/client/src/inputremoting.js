@@ -68,6 +68,8 @@ export class InputRemoting {
     this._localManager = manager;
     this._subscribers = new Array();
     this._sending = false;
+    this._onEvent = null;
+    this._onDeviceChange = null;
   }
 
   startSending() {
@@ -76,17 +78,20 @@ export class InputRemoting {
     }
     this._sending = true;
 
-    const onEvent = e => {
-      this._sendEvent(e.detail.event);
-    };
-
-    const onDeviceChange = e => {
-      this._sendDeviceChange(e.detail.device, e.detail.change);
-    };
+    if (this._onEvent == null) {
+      this._onEvent = e => {
+        this._sendEvent(e.detail.event);
+      };
+    }
+    if (this._onDeviceChange == null) {
+      this._onDeviceChange = e => {
+        this._sendDeviceChange(e.detail.device, e.detail.change);
+      };
+    }
 
     this._localManager.setStartTime(Date.now()/1000);
-    this._localManager.onEvent.addEventListener("event", onEvent);
-    this._localManager.onEvent.addEventListener("changedeviceusage", onDeviceChange);
+    this._localManager.onEvent.addEventListener("event", this._onEvent);
+    this._localManager.onEvent.addEventListener("changedeviceusage", this._onDeviceChange);
     this._sendInitialMessages();
   }
 
@@ -95,6 +100,12 @@ export class InputRemoting {
       return;
     }
     this._sending = false;
+    if (this._onEvent) {
+      this._localManager.onEvent.removeEventListener("event", this._onEvent);
+    }
+    if (this._onDeviceChange) {
+      this._localManager.onEvent.removeEventListener("changedeviceusage", this._onDeviceChange);
+    }
   }
 
   /**
@@ -168,6 +179,9 @@ export class InputRemoting {
   }  
 
   _send(message) {
+    if (!this._sending) {
+      return;
+    }
     for(let subscriber of this._subscribers) {
       subscriber.onNext(message);
     }

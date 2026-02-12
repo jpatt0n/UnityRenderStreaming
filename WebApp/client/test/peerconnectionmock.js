@@ -112,8 +112,8 @@ export class PeerConnectionMock extends EventTarget {
     return transceiver;
   }
 
-  createDataChannel(label) {
-    const channel = { id: getUniqueId(), label: label };
+  createDataChannel(label, options = undefined) {
+    const channel = { id: getUniqueId(), label: label, options: options };
     this.channels.set(channel.id, channel);
     this.fireOnNegotiationNeeded();
     return channel;

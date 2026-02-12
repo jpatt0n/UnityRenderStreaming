@@ -38,6 +38,14 @@ const usernameInput = document.getElementById('usernameInput');
 const micCheck = document.getElementById('micCheck');
 const audioSelect = document.querySelector('select#audioSource');
 const videoPlayer = new VideoPlayer();
+const INPUT_CHANNEL_LABEL = "input";
+const INPUT_CHANNEL_OPTIONS = { ordered: false, maxRetransmits: 0 };
+const INPUT_CHANNEL_OPEN_TIMEOUT_MS = 10000;
+const INPUT_CHANNEL_RECOVERY_DELAY_MS = 1500;
+let inputChannel = null;
+let inputChannelOpenTimer = null;
+let inputChannelRecoveryTimer = null;
+let inputChannelRecovering = false;
 let micTransceiver = null;
 let webcamTransceiver = null;
 let localVideoStream = null;
@@ -219,8 +227,7 @@ async function setupRenderStreaming() {
 }
 
 async function onConnect() {
-  const channel = renderstreaming.createDataChannel("input");
-  videoPlayer.setupInput(channel);
+  createInputChannel();
   if (micCheck && micCheck.checked) {
     await startMicrophone();
   }
@@ -251,6 +258,7 @@ async function teardownConnection(message) {
     renderstreaming = null;
   }
 
+  resetInputChannelState();
   videoPlayer.deletePlayer();
   stopMicrophone();
   stopWebcam();
@@ -261,6 +269,118 @@ async function teardownConnection(message) {
   }
   setUiState('ready');
   isTearingDown = false;
+}
+
+function createInputChannel() {
+  if (!renderstreaming) {
+    return;
+  }
+
+  let channel = null;
+  try {
+    channel = renderstreaming.createDataChannel(INPUT_CHANNEL_LABEL, INPUT_CHANNEL_OPTIONS);
+  } catch (error) {
+    channel = renderstreaming.createDataChannel(INPUT_CHANNEL_LABEL);
+  }
+
+  if (!channel) {
+    scheduleInputChannelRecovery();
+    return;
+  }
+
+  inputChannel = channel;
+  bindInputChannelLifecycle(channel);
+  videoPlayer.setupInput(channel);
+  armInputChannelOpenTimeout(channel);
+}
+
+function bindInputChannelLifecycle(channel) {
+  const onOpen = () => {
+    if (channel !== inputChannel) {
+      return;
+    }
+    clearInputChannelOpenTimeout();
+    clearInputChannelRecovery();
+    if (inputChannelRecovering) {
+      inputChannelRecovering = false;
+      setStatusMessage('');
+    }
+  };
+
+  const onInterrupted = () => {
+    if (channel !== inputChannel) {
+      return;
+    }
+    scheduleInputChannelRecovery();
+  };
+
+  if (channel.addEventListener) {
+    channel.addEventListener('open', onOpen);
+    channel.addEventListener('close', onInterrupted);
+    channel.addEventListener('error', onInterrupted);
+  } else {
+    channel.onopen = onOpen;
+    channel.onclose = onInterrupted;
+    channel.onerror = onInterrupted;
+  }
+}
+
+function armInputChannelOpenTimeout(channel) {
+  clearInputChannelOpenTimeout();
+  inputChannelOpenTimer = setTimeout(() => {
+    if (!renderstreaming || isTearingDown) {
+      return;
+    }
+    if (channel !== inputChannel) {
+      return;
+    }
+    if (channel.readyState === 'open') {
+      return;
+    }
+    scheduleInputChannelRecovery();
+  }, INPUT_CHANNEL_OPEN_TIMEOUT_MS);
+}
+
+function clearInputChannelOpenTimeout() {
+  if (inputChannelOpenTimer != null) {
+    clearTimeout(inputChannelOpenTimer);
+    inputChannelOpenTimer = null;
+  }
+}
+
+function clearInputChannelRecovery() {
+  if (inputChannelRecoveryTimer != null) {
+    clearTimeout(inputChannelRecoveryTimer);
+    inputChannelRecoveryTimer = null;
+  }
+}
+
+function scheduleInputChannelRecovery() {
+  if (!renderstreaming || isTearingDown) {
+    return;
+  }
+
+  clearInputChannelOpenTimeout();
+  if (inputChannelRecoveryTimer != null) {
+    return;
+  }
+
+  inputChannelRecovering = true;
+  setStatusMessage('Input controls interrupted. Reconnecting controls...');
+  inputChannelRecoveryTimer = setTimeout(() => {
+    inputChannelRecoveryTimer = null;
+    if (!renderstreaming || isTearingDown) {
+      return;
+    }
+    createInputChannel();
+  }, INPUT_CHANNEL_RECOVERY_DELAY_MS);
+}
+
+function resetInputChannelState() {
+  clearInputChannelOpenTimeout();
+  clearInputChannelRecovery();
+  inputChannelRecovering = false;
+  inputChannel = null;
 }
 
 function setCodecPreferences() {
