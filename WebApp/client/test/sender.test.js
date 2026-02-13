@@ -6,6 +6,7 @@ import {
   Sender,
   Observer
 } from "../src/sender.js";
+import { Keymap } from "../src/keymap.js";
 
 import {jest} from '@jest/globals';
 import {DOMRect} from "./domrect.js";
@@ -106,7 +107,29 @@ describe(`Sender`, () => {
       events.keydown(
         new KeyboardEvent('keydown', { code: 'KeyA', repeat: true }));
       expect(dc.send).toHaveBeenCalledWith(expect.any(ArrayBuffer));
-    });    
+    });
+    test('releaseAllInputs sends keyup for pressed keys', () => {
+      jest.spyOn(dc, 'send');
+      sender.addKeyboard();
+      inputRemoting.subscribe(observer);
+      inputRemoting.startSending();
+      events.keydown(
+        new KeyboardEvent('keydown', { code: 'ControlLeft' }));
+      dc.send.mockClear();
+      sender.releaseAllInputs();
+      expect(dc.send).toHaveBeenCalledWith(expect.any(ArrayBuffer));
+    });
+    test('alt fallback maps to control key state', () => {
+      sender.addKeyboard();
+      sender.setAltAsControlFallback(true);
+      events.keydown(
+        new KeyboardEvent('keydown', { code: 'AltLeft' }));
+      const view = new Uint8Array(sender.keyboard.currentState.keys);
+      const keyBit = Keymap.ControlLeft;
+      const keyByteOffset = Math.floor(keyBit / 8);
+      const keyMask = 1 << (keyBit % 8);
+      expect((view[keyByteOffset] & keyMask) !== 0).toBe(true);
+    });
   });
   describe('touchscreen', () => {
     test('touchstart', () => {
