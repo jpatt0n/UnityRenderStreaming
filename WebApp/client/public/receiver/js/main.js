@@ -39,7 +39,6 @@ const micCheck = document.getElementById('micCheck');
 const audioSelect = document.querySelector('select#audioSource');
 const videoPlayer = new VideoPlayer();
 const INPUT_CHANNEL_LABEL = "input";
-const INPUT_CHANNEL_OPTIONS = { ordered: false, maxRetransmits: 0 };
 const INPUT_CHANNEL_OPEN_TIMEOUT_MS = 10000;
 const INPUT_CHANNEL_RECOVERY_DELAY_MS = 1500;
 let inputChannel = null;
@@ -276,12 +275,7 @@ function createInputChannel() {
     return;
   }
 
-  let channel = null;
-  try {
-    channel = renderstreaming.createDataChannel(INPUT_CHANNEL_LABEL, INPUT_CHANNEL_OPTIONS);
-  } catch (error) {
-    channel = renderstreaming.createDataChannel(INPUT_CHANNEL_LABEL);
-  }
+  const channel = renderstreaming.createDataChannel(INPUT_CHANNEL_LABEL);
 
   if (!channel) {
     scheduleInputChannelRecovery();

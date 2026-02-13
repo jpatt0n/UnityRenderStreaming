@@ -239,7 +239,14 @@ export class VideoPlayer {
       this.inputObserver = new Observer(channel);
       this.inputRemoting.subscribe(this.inputObserver);
     } else if (this.inputObserver) {
-      this.inputObserver.setChannel(channel);
+      if (typeof this.inputObserver.setChannel === 'function') {
+        this.inputObserver.setChannel(channel);
+      } else if ('channel' in this.inputObserver) {
+        this.inputObserver.channel = channel;
+      } else {
+        this.inputObserver = new Observer(channel);
+        this.inputRemoting.subscribe(this.inputObserver);
+      }
     } else {
       this.inputObserver = new Observer(channel);
       this.inputRemoting.subscribe(this.inputObserver);

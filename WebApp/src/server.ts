@@ -41,8 +41,18 @@ export const createServer = (config: Options): express.Application => {
   app.use('/signaling', signaling);
   app.use(`${basePath}/signaling`, signaling);
 
-  app.use(basePath, express.static(publicDir));
-  app.use(`${basePath}/module`, express.static(moduleDir));
+  const staticOptions = {
+    etag: true,
+    setHeaders: (res) => {
+      // Avoid stale mixed-version JS module caches after client deploys.
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+    }
+  };
+
+  app.use(basePath, express.static(publicDir, staticOptions));
+  app.use(`${basePath}/module`, express.static(moduleDir, staticOptions));
 
   app.get('/', (req, res) => res.redirect(`${basePath}/index.html`));
   app.get('/receiver', (req, res) => res.redirect(`${basePath}/index.html`));
