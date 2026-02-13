@@ -226,7 +226,7 @@ export class MouseState extends IInputState {
     this.delta = [event.movementX, -event.movementY];
     this.scroll = [0, 0];
     if(event.type === 'wheel') {
-      this.scroll = [event.deltaX, event.deltaY];
+      this.scroll = [event.deltaX, -event.deltaY];
     }
     this.buttons = new ArrayBuffer(2);
 
