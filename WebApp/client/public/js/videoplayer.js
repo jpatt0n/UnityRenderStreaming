@@ -21,6 +21,12 @@ export class VideoPlayer {
     this._onFullscreenChangeHandler = this._onFullscreenChange.bind(this);
     this._onOpenInputSenderChannelHandler = this._onOpenInputSenderChannel.bind(this);
     this._onCloseInputSenderChannelHandler = this._onCloseInputSenderChannel.bind(this);
+    this._onWindowKeyDownHandler = this._onWindowKeyDown.bind(this);
+    this._onWindowBlurHandler = this._onWindowBlur.bind(this);
+    this._onPageHideHandler = this._onPageHide.bind(this);
+    this._onVisibilityChangeHandler = this._onVisibilityChange.bind(this);
+    this._onPointerLockChangeHandler = this._onPointerLockChange.bind(this);
+    this._keyboardLockRequest = null;
   }
 
   /**
@@ -50,14 +56,16 @@ export class VideoPlayer {
 
     document.addEventListener('webkitfullscreenchange', this._onFullscreenChangeHandler);
     document.addEventListener('fullscreenchange', this._onFullscreenChangeHandler);
+    document.addEventListener('mozfullscreenchange', this._onFullscreenChangeHandler);
     this.videoElement.addEventListener("click", this._mouseClick.bind(this), false);
     this.videoElement.addEventListener("click", () => this.videoElement.focus(), false);
-
-    window.addEventListener('keydown', (e) => {
-      if (document.pointerLockElement === this.videoElement || document.activeElement === this.videoElement) {
-        e.preventDefault();
-      }
-    }, { passive: false });
+    document.addEventListener('keydown', this._onWindowKeyDownHandler, true);
+    window.addEventListener('blur', this._onWindowBlurHandler, false);
+    window.addEventListener('pagehide', this._onPageHideHandler, false);
+    document.addEventListener('visibilitychange', this._onVisibilityChangeHandler, false);
+    document.addEventListener('pointerlockchange', this._onPointerLockChangeHandler, false);
+    document.addEventListener('mozpointerlockchange', this._onPointerLockChangeHandler, false);
+    document.addEventListener('webkitpointerlockchange', this._onPointerLockChangeHandler, false);
   }
 
   _onLoadedVideo() {
@@ -95,6 +103,14 @@ export class VideoPlayer {
     this.playerElement.classList.toggle('is-fullscreen', isFullscreen);
     this.fullScreenButtonElement.style.display = isFullscreen ? 'none' : 'block';
     this.resizeVideo();
+    if (isFullscreen) {
+      this._lockKeyboardMovementKeys();
+    } else {
+      this._unlockKeyboardMovementKeys();
+    }
+    if (this.sender && typeof this.sender.setAltAsControlFallback === 'function') {
+      this.sender.setAltAsControlFallback(!isFullscreen);
+    }
 
     if (isFullscreen) {
       if (this.lockMouseCheck.checked && fullscreenElement && fullscreenElement.requestPointerLock) {
@@ -137,6 +153,90 @@ export class VideoPlayer {
         document.mozFullScreenElement.requestPointerLock();
       }
     }
+  }
+
+  _onWindowKeyDown(event) {
+    if (!this._shouldCaptureKeyboardInput()) {
+      return;
+    }
+    if (event.cancelable) {
+      event.preventDefault();
+    }
+  }
+
+  _onWindowBlur() {
+    this._releaseCapturedInputs();
+  }
+
+  _onPageHide() {
+    this._releaseCapturedInputs();
+  }
+
+  _onVisibilityChange() {
+    if (document.visibilityState === 'hidden') {
+      this._releaseCapturedInputs();
+    }
+  }
+
+  _onPointerLockChange() {
+    const pointerLockElement = document.pointerLockElement
+      || document.webkitPointerLockElement
+      || document.mozPointerLockElement;
+    if (!pointerLockElement) {
+      this._releaseCapturedInputs();
+    }
+  }
+
+  _shouldCaptureKeyboardInput() {
+    if (!this.videoElement || !this.playerElement) {
+      return false;
+    }
+    const pointerLockElement = document.pointerLockElement
+      || document.webkitPointerLockElement
+      || document.mozPointerLockElement;
+    if (pointerLockElement === this.videoElement
+      || pointerLockElement === this.playerElement
+      || (pointerLockElement != null && this.playerElement.contains(pointerLockElement))) {
+      return true;
+    }
+    const activeElement = document.activeElement;
+    if (activeElement === this.videoElement || activeElement === this.playerElement) {
+      return true;
+    }
+    const fullscreenElement = document.fullscreenElement
+      || document.webkitFullscreenElement
+      || document.mozFullScreenElement;
+    if (fullscreenElement === this.playerElement
+      || (fullscreenElement != null && this.playerElement.contains(fullscreenElement))) {
+      return true;
+    }
+    return false;
+  }
+
+  _releaseCapturedInputs() {
+    if (!this.sender || typeof this.sender.releaseAllInputs !== 'function') {
+      return;
+    }
+    this.sender.releaseAllInputs();
+  }
+
+  _lockKeyboardMovementKeys() {
+    if (!navigator.keyboard || typeof navigator.keyboard.lock !== 'function') {
+      return;
+    }
+    this._keyboardLockRequest = navigator.keyboard.lock([
+      'KeyW', 'KeyA', 'KeyS', 'KeyD',
+      'ControlLeft', 'ControlRight',
+      'ShiftLeft', 'ShiftRight', 'Space'
+    ]);
+    this._keyboardLockRequest.catch(() => { });
+  }
+
+  _unlockKeyboardMovementKeys() {
+    if (navigator.keyboard && typeof navigator.keyboard.unlock === 'function') {
+      navigator.keyboard.unlock();
+    }
+    this._keyboardLockRequest = null;
   }
 
   /**
@@ -187,9 +287,14 @@ export class VideoPlayer {
   }
 
   deletePlayer() {
+    this._releaseCapturedInputs();
+    this._unlockKeyboardMovementKeys();
     this._setInputSenderChannel(null);
     if (this.inputRemoting) {
       this.inputRemoting.stopSending();
+    }
+    if (this.sender && typeof this.sender.dispose === 'function') {
+      this.sender.dispose();
     }
     this.inputRemoting = null;
     this.sender = null;
@@ -205,6 +310,16 @@ export class VideoPlayer {
     if (this.fullScreenButtonElement && this.fullScreenButtonElement.parentNode) {
       this.fullScreenButtonElement.parentNode.removeChild(this.fullScreenButtonElement);
     }
+    document.removeEventListener('webkitfullscreenchange', this._onFullscreenChangeHandler);
+    document.removeEventListener('fullscreenchange', this._onFullscreenChangeHandler);
+    document.removeEventListener('mozfullscreenchange', this._onFullscreenChangeHandler);
+    document.removeEventListener('keydown', this._onWindowKeyDownHandler, true);
+    window.removeEventListener('blur', this._onWindowBlurHandler, false);
+    window.removeEventListener('pagehide', this._onPageHideHandler, false);
+    document.removeEventListener('visibilitychange', this._onVisibilityChangeHandler, false);
+    document.removeEventListener('pointerlockchange', this._onPointerLockChangeHandler, false);
+    document.removeEventListener('mozpointerlockchange', this._onPointerLockChangeHandler, false);
+    document.removeEventListener('webkitpointerlockchange', this._onPointerLockChangeHandler, false);
 
     this.playerElement = null;
     this.lockMouseCheck = null;
@@ -231,6 +346,7 @@ export class VideoPlayer {
       this.sender = new Sender(this.videoElement);
       this.sender.addMouse();
       this.sender.addKeyboard();
+      this.sender.setAltAsControlFallback(true);
       if (this._isTouchDevice()) {
         this.sender.addTouchscreen();
       }
