@@ -26,9 +26,7 @@ export class VideoPlayer {
     this._onPageHideHandler = this._onPageHide.bind(this);
     this._onVisibilityChangeHandler = this._onVisibilityChange.bind(this);
     this._onPointerLockChangeHandler = this._onPointerLockChange.bind(this);
-    this._onVideoInteractionHandler = this._onVideoInteraction.bind(this);
     this._keyboardLockRequest = null;
-    this._awaitingUserPlayback = false;
   }
 
   /**
@@ -43,11 +41,7 @@ export class VideoPlayer {
     this.videoElement.id = 'Video';
     this.videoElement.style.touchAction = 'none';
     this.videoElement.tabIndex = 0;
-    this.videoElement.autoplay = true;
     this.videoElement.playsInline = true;
-    this.videoElement.setAttribute('autoplay', '');
-    this.videoElement.setAttribute('playsinline', '');
-    this.videoElement.setAttribute('webkit-playsinline', '');
     this.videoElement.srcObject = new MediaStream();
     this.videoElement.addEventListener('loadedmetadata', this._onLoadedVideo.bind(this), true);
     this.playerElement.appendChild(this.videoElement);
@@ -65,8 +59,6 @@ export class VideoPlayer {
     document.addEventListener('mozfullscreenchange', this._onFullscreenChangeHandler);
     this.videoElement.addEventListener("click", this._mouseClick.bind(this), false);
     this.videoElement.addEventListener("click", () => this.videoElement.focus(), false);
-    this.videoElement.addEventListener("click", this._onVideoInteractionHandler, false);
-    this.videoElement.addEventListener("touchstart", this._onVideoInteractionHandler, { passive: true });
     document.addEventListener('keydown', this._onWindowKeyDownHandler, true);
     window.addEventListener('blur', this._onWindowBlurHandler, false);
     window.addEventListener('pagehide', this._onPageHideHandler, false);
@@ -74,60 +66,14 @@ export class VideoPlayer {
     document.addEventListener('pointerlockchange', this._onPointerLockChangeHandler, false);
     document.addEventListener('mozpointerlockchange', this._onPointerLockChangeHandler, false);
     document.addEventListener('webkitpointerlockchange', this._onPointerLockChangeHandler, false);
-
-    // Start playback while the join button gesture is still active so mobile
-    // browsers allow the remote stream to render once tracks arrive.
-    void this._attemptPlayback({ allowMutedFallback: false });
   }
 
   _onLoadedVideo() {
-    void this._attemptPlayback();
+    this.videoElement.play();
     this.resizeVideo();
     if (this.sender && this.sender._onResizeEvent) {
       this.sender._onResizeEvent();
     }
-  }
-
-  async _attemptPlayback({ allowMutedFallback = true } = {}) {
-    if (!this.videoElement) {
-      return false;
-    }
-
-    try {
-      const playResult = this.videoElement.play();
-      if (playResult && typeof playResult.then === 'function') {
-        await playResult;
-      }
-      this._awaitingUserPlayback = false;
-      return true;
-    } catch (error) {
-      if (allowMutedFallback && !this.videoElement.muted) {
-        this.videoElement.muted = true;
-        try {
-          const mutedPlayResult = this.videoElement.play();
-          if (mutedPlayResult && typeof mutedPlayResult.then === 'function') {
-            await mutedPlayResult;
-          }
-          this._awaitingUserPlayback = true;
-          return true;
-        } catch (mutedError) {
-          error = mutedError;
-        }
-      }
-
-      this._awaitingUserPlayback = true;
-      console.warn('Remote playback is waiting for a user interaction.', error);
-      return false;
-    }
-  }
-
-  _onVideoInteraction() {
-    if (!this.videoElement || !this._awaitingUserPlayback) {
-      return;
-    }
-
-    this.videoElement.muted = false;
-    void this._attemptPlayback({ allowMutedFallback: false });
   }
 
   _onClickFullscreenButton() {
@@ -359,8 +305,6 @@ export class VideoPlayer {
     this.inputSenderChannel = null;
 
     if (this.videoElement && this.videoElement.parentNode) {
-      this.videoElement.removeEventListener("click", this._onVideoInteractionHandler, false);
-      this.videoElement.removeEventListener("touchstart", this._onVideoInteractionHandler, { passive: true });
       this.videoElement.parentNode.removeChild(this.videoElement);
     }
     if (this.fullScreenButtonElement && this.fullScreenButtonElement.parentNode) {
@@ -381,7 +325,6 @@ export class VideoPlayer {
     this.lockMouseCheck = null;
     this.videoElement = null;
     this.fullScreenButtonElement = null;
-    this._awaitingUserPlayback = false;
   }
 
   _isTouchDevice() {
