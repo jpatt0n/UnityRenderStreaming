@@ -42,6 +42,9 @@ export class VideoPlayer {
     this.videoElement.style.touchAction = 'none';
     this.videoElement.tabIndex = 0;
     this.videoElement.playsInline = true;
+    this.videoElement.autoplay = true;
+    this.videoElement.defaultMuted = true;
+    this.videoElement.muted = true;
     this.videoElement.srcObject = new MediaStream();
     this.videoElement.addEventListener('loadedmetadata', this._onLoadedVideo.bind(this), true);
     this.playerElement.appendChild(this.videoElement);
@@ -69,10 +72,25 @@ export class VideoPlayer {
   }
 
   _onLoadedVideo() {
-    this.videoElement.play();
+    this.startPlayback();
     this.resizeVideo();
     if (this.sender && this.sender._onResizeEvent) {
       this.sender._onResizeEvent();
+    }
+  }
+
+  startPlayback() {
+    if (!this.videoElement) {
+      return;
+    }
+
+    const playPromise = this.videoElement.play();
+    if (playPromise && typeof playPromise.catch === 'function') {
+      playPromise.catch(error => {
+        if (error && error.name !== 'AbortError') {
+          console.warn('Video playback did not start automatically.', error);
+        }
+      });
     }
   }
 
@@ -134,6 +152,11 @@ export class VideoPlayer {
   }
 
   _mouseClick() {
+    if (this.videoElement.muted) {
+      this.videoElement.muted = false;
+      this.startPlayback();
+    }
+
     // Restores pointer lock when we unfocus the player and click on it again
     if (this.lockMouseCheck.checked) {
       if (this.videoElement.requestPointerLock) {

@@ -81,6 +81,10 @@ namespace Unity.RenderStreaming
 
         private int m_frequency = 48000;
 
+        private readonly object m_setDataLock = new object();
+
+        private bool m_setDataEnabled;
+
         /// <summary>
         /// Gets or sets the source of the audio stream.
         /// </summary>
@@ -294,10 +298,13 @@ namespace Unity.RenderStreaming
 
         private protected override void OnDestroy()
         {
-            base.OnDestroy();
-
-            m_sourceImpl?.Dispose();
-            m_sourceImpl = null;
+            lock (m_setDataLock)
+            {
+                m_setDataEnabled = false;
+                base.OnDestroy();
+                m_sourceImpl?.Dispose();
+                m_sourceImpl = null;
+            }
         }
 
         void OnAudioConfigurationChanged(bool deviceWasChanged)
@@ -307,12 +314,29 @@ namespace Unity.RenderStreaming
 
         void _OnStartedStream(string connectionId)
         {
+            SetDataEnabled(true);
         }
 
         void _OnStoppedStream(string connectionId)
         {
-            m_sourceImpl?.Dispose();
-            m_sourceImpl = null;
+            lock (m_setDataLock)
+            {
+                m_setDataEnabled = false;
+                m_sourceImpl?.Dispose();
+                m_sourceImpl = null;
+            }
+        }
+
+        /// <summary>
+        /// Enables or disables API-only audio writes. Disabling waits for an
+        /// in-flight write to finish so the caller can safely remove the track.
+        /// </summary>
+        public void SetDataEnabled(bool enabled)
+        {
+            lock (m_setDataLock)
+            {
+                m_setDataEnabled = enabled;
+            }
         }
 
         internal override WaitForCreateTrack CreateTrack()
@@ -377,9 +401,13 @@ namespace Unity.RenderStreaming
         {
             if (m_Source != AudioStreamSource.APIOnly)
                 throw new InvalidOperationException("To use this method, please set AudioStreamSource.APIOnly to source property");
-            if (!isPlaying)
-                return;
-            (m_sourceImpl as AudioStreamSourceAPIOnly)?.SetData(nativeArray, channels, m_sampleRate);
+
+            lock (m_setDataLock)
+            {
+                if (!m_setDataEnabled)
+                    return;
+                (m_sourceImpl as AudioStreamSourceAPIOnly)?.SetData(nativeArray, channels, m_sampleRate);
+            }
         }
 
         abstract class AudioStreamSourceImpl : IDisposable

@@ -198,6 +198,9 @@ function onClickJoinButton() {
   }
 
   videoPlayer.createPlayer(playerDiv, lockMouseCheck);
+  // Call play() while the Join click still carries browser user activation.
+  // Waiting for loadedmetadata is too late for streams that include audio.
+  videoPlayer.startPlayback();
   if (webcamCheck && webcamCheck.checked) {
     void startWebcam();
   }
