@@ -158,7 +158,7 @@ namespace Unity.RenderStreaming
             StartCoroutine(AddSenderCoroutine(connectionId, sender));
         }
 
-        private IEnumerator AddSenderCoroutine(string connectionId, IStreamSender sender)
+        protected IEnumerator AddSenderCoroutine(string connectionId, IStreamSender sender)
         {
             if (sender.Track == null && sender is StreamSenderBase senderBase)
             {

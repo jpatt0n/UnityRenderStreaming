@@ -41,10 +41,17 @@ const videoPlayer = new VideoPlayer();
 const INPUT_CHANNEL_LABEL = "input";
 const INPUT_CHANNEL_OPEN_TIMEOUT_MS = 10000;
 const INPUT_CHANNEL_RECOVERY_DELAY_MS = 1500;
+const MEDIA_START_TIMEOUT_MS = 10000;
+const MEDIA_RECONNECT_DELAY_MS = 1000;
+const MAX_MEDIA_RECONNECT_ATTEMPTS = 3;
+const MICROPHONE_START_DELAY_MS = 500;
 let inputChannel = null;
 let inputChannelOpenTimer = null;
 let inputChannelRecoveryTimer = null;
 let inputChannelRecovering = false;
+let mediaStartTimer = null;
+let mediaReconnectAttempts = 0;
+let microphoneStartTimer = null;
 let micTransceiver = null;
 let webcamTransceiver = null;
 let localVideoStream = null;
@@ -187,6 +194,7 @@ function onClickJoinButton() {
   }
   usernameInput.value = username;
   saveUsername(username);
+  mediaReconnectAttempts = 0;
   setStatusMessage('');
 
   setUiState('connecting');
@@ -219,24 +227,34 @@ async function setupRenderStreaming() {
   renderstreaming = new RenderStreaming(signaling, config);
   renderstreaming.onConnect = onConnect;
   renderstreaming.onDisconnect = onDisconnect;
-  renderstreaming.onTrackEvent = (data) => videoPlayer.addTrack(data.track);
+  renderstreaming.onTrackEvent = onRemoteTrack;
   renderstreaming.onGotOffer = setCodecPreferences;
 
   await renderstreaming.start();
   const username = sanitizeUsername(usernameInput.value);
   const connectionId = createConnectionId(username);
   await renderstreaming.createConnection(connectionId);
+  armMediaStartTimeout();
+}
+
+function onRemoteTrack(data) {
+  videoPlayer.addTrack(data.track);
+  if (data.track && data.track.kind === 'video') {
+    clearMediaStartTimeout();
+    mediaReconnectAttempts = 0;
+    setStatusMessage('');
+    scheduleMicrophoneStart();
+  }
 }
 
 async function onConnect() {
   createInputChannel();
-  if (micCheck && micCheck.checked) {
-    await startMicrophone();
-  }
   if (webcamCheck && webcamCheck.checked) {
     await startWebcam();
   }
-  setStatusMessage('');
+  if (mediaReconnectAttempts === 0) {
+    setStatusMessage('');
+  }
   setUiState('connected');
   showStatsMessage();
 }
@@ -247,12 +265,14 @@ async function onDisconnect(connectionId) {
   await teardownConnection(message);
 }
 
-async function teardownConnection(message) {
+async function teardownConnection(message, showReady = true) {
   if (isTearingDown) {
     return;
   }
   isTearingDown = true;
   clearStatsMessage();
+  clearMediaStartTimeout();
+  clearMicrophoneStart();
   setStatusMessage(message || '');
 
   if (renderstreaming) {
@@ -269,8 +289,71 @@ async function teardownConnection(message) {
   if (supportsSetCodecPreferences) {
     codecPreferences.disabled = false;
   }
-  setUiState('ready');
+  if (showReady) {
+    setUiState('ready');
+  }
   isTearingDown = false;
+}
+
+function armMediaStartTimeout() {
+  clearMediaStartTimeout();
+  mediaStartTimer = setTimeout(async () => {
+    mediaStartTimer = null;
+    if (!renderstreaming || isTearingDown) {
+      return;
+    }
+
+    const video = document.getElementById('Video');
+    if (video && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+      mediaReconnectAttempts = 0;
+      return;
+    }
+
+    if (mediaReconnectAttempts >= MAX_MEDIA_RECONNECT_ATTEMPTS) {
+      setStatusMessage('No video received. Restart Unity Play mode, then click Disconnect and Join.');
+      return;
+    }
+
+    mediaReconnectAttempts++;
+    await teardownConnection('', false);
+    await new Promise(resolve => setTimeout(resolve, MEDIA_RECONNECT_DELAY_MS));
+    setStatusMessage(`Waiting for Unity video. Reconnecting (${mediaReconnectAttempts}/${MAX_MEDIA_RECONNECT_ATTEMPTS})...`);
+    setUiState('connecting');
+    videoPlayer.createPlayer(playerDiv, lockMouseCheck);
+    videoPlayer.startPlayback();
+    await setupRenderStreaming();
+  }, MEDIA_START_TIMEOUT_MS);
+}
+
+function clearMediaStartTimeout() {
+  if (mediaStartTimer != null) {
+    clearTimeout(mediaStartTimer);
+    mediaStartTimer = null;
+  }
+}
+
+function scheduleMicrophoneStart() {
+  clearMicrophoneStart();
+  if (!micCheck || !micCheck.checked) {
+    return;
+  }
+
+  // Unity adds outbound media immediately after the initial data-channel
+  // answer. Let that offer/answer settle before the browser adds its mic
+  // transceiver, otherwise both impolite peers can reject each other's offer.
+  microphoneStartTimer = setTimeout(() => {
+    microphoneStartTimer = null;
+    if (renderstreaming && !isTearingDown && micCheck.checked) {
+      void startMicrophone();
+    }
+  }, MICROPHONE_START_DELAY_MS);
+}
+
+function clearMicrophoneStart() {
+  if (microphoneStartTimer != null) {
+    clearTimeout(microphoneStartTimer);
+    microphoneStartTimer = null;
+  }
 }
 
 function createInputChannel() {
