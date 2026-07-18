@@ -41,6 +41,7 @@ describe('websocket signaling test in public mode', () => {
     await wsHandler.onConnect(client, connectionId);
     await expect(server).toReceiveMessage({ type: "connect", connectionId: connectionId, polite: true });
     expect(server).toHaveReceivedMessages([{ type: "connect", connectionId: connectionId, polite: true }]);
+    expect(wsHandler.getConnectionIds(client)).toEqual([connectionId]);
   });
 
   test('create connection from session2', async () => {

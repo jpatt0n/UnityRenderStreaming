@@ -8,6 +8,10 @@ $serviceName = "Cloudflared"
 $webPort = 55055
 $webProcess = $null
 $watchdogProcess = $null
+$logDirectory = Join-Path $env:LOCALAPPDATA "RenderedSenseless\RenderStreaming"
+$stdoutLog = Join-Path $logDirectory "webapp.stdout.log"
+$stderrLog = Join-Path $logDirectory "webapp.stderr.log"
+$launcherErrorLog = Join-Path $logDirectory "launcher-error.log"
 
 function Test-IsAdministrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -30,15 +34,18 @@ if (-not (Test-IsAdministrator)) {
         "-Elevated"
     )
 
-    $elevatedProcess = Start-Process `
+    Start-Process `
         -FilePath "powershell.exe" `
         -Verb RunAs `
-        -ArgumentList $arguments `
-        -Wait `
-        -PassThru
+        -ArgumentList $arguments
 
-    exit $elevatedProcess.ExitCode
+    # The unelevated PowerShell and its run.bat console are only launch stubs.
+    # Exit them immediately so the elevated host is the sole visible window.
+    exit 0
 }
+
+New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
+Remove-Item -LiteralPath $launcherErrorLog -Force -ErrorAction SilentlyContinue
 
 Push-Location $PSScriptRoot
 
@@ -67,7 +74,9 @@ try {
         -FilePath $node `
         -ArgumentList ".\build\index.js" `
         -WorkingDirectory $PSScriptRoot `
-        -NoNewWindow `
+        -RedirectStandardOutput $stdoutLog `
+        -RedirectStandardError $stderrLog `
+        -WindowStyle Hidden `
         -PassThru
 
     $deadline = (Get-Date).AddSeconds(30)
@@ -96,6 +105,7 @@ try {
             "-WindowStyle", "Hidden",
             "-File", "`"$PSScriptRoot\watch-public-host.ps1`"",
             "-WebProcessId", $webProcess.Id,
+            "-HostProcessId", $PID,
             "-Port", $webPort,
             "-ServiceName", $serviceName
         ) `
@@ -104,6 +114,9 @@ try {
 
     Write-Host ""
     Write-Host "Public host is live at https://stream.renderedsenseless.com"
+    Write-Host "WebApp logs:"
+    Write-Host "  $stdoutLog"
+    Write-Host "  $stderrLog"
     Write-Host "Close this window or press Ctrl+C to stop the WebApp and connector."
     Write-Host ""
 
@@ -112,6 +125,10 @@ try {
     if ($webProcess.ExitCode -ne 0) {
         throw "WebApp exited with code $($webProcess.ExitCode)."
     }
+}
+catch {
+    $_ | Out-String | Set-Content -LiteralPath $launcherErrorLog
+    throw
 }
 finally {
     Write-Host "Stopping public host..."

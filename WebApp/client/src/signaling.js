@@ -157,14 +157,29 @@ export class WebSocketSignaling extends EventTarget {
 
     this.websocket.onopen = () => {
       this.isWsOpen = true;
+      Logger.info(`[signaling] WebSocket opened url=${websocketUrl}`);
     };
 
-    this.websocket.onclose = () => {
+    this.websocket.onclose = (event) => {
       this.isWsOpen = false;
+      Logger.warn(
+        `[signaling] WebSocket closed code=${event.code} reason=${event.reason || '(none)'} wasClean=${event.wasClean} url=${websocketUrl}`
+      );
+    };
+
+    this.websocket.onerror = () => {
+      Logger.error(`[signaling] WebSocket error url=${websocketUrl} readyState=${this.websocket.readyState}`);
     };
 
     this.websocket.onmessage = (event) => {
-      const msg = JSON.parse(event.data);
+      let msg;
+      try {
+        msg = JSON.parse(event.data);
+      } catch (error) {
+        Logger.error(`[signaling] Invalid WebSocket payload: ${error}`);
+        return;
+      }
+
       if (!msg || !this) {
         return;
       }

@@ -400,7 +400,11 @@ namespace Unity.RenderStreaming
 
         private void UnassignUserAndDevices()
         {
+            if (!m_InputUser.valid)
+                return;
+
             m_InputUser.UnpairDevicesAndRemoveUser();
+            m_InputUser = new InputUser();
         }
 
         private void InitializeActions()

@@ -42,6 +42,10 @@ function add(ws: WebSocket): void {
   clients.set(ws, new Set<string>());
 }
 
+function getConnectionIds(ws: WebSocket): string[] {
+  return Array.from(clients.get(ws) ?? []);
+}
+
 function remove(ws: WebSocket): void {
   const connectionIds = clients.get(ws);
   if (!connectionIds) {
@@ -173,4 +177,4 @@ function onCandidate(ws: WebSocket, message: any): void {
   });
 }
 
-export { reset, add, remove, onConnect, onDisconnect, onOffer, onAnswer, onCandidate };
+export { reset, add, getConnectionIds, remove, onConnect, onDisconnect, onOffer, onAnswer, onCandidate };
