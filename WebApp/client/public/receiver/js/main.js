@@ -220,14 +220,16 @@ async function onClickJoinButton() {
       admissionIdentity = result.identity;
       admissionToken = result.token;
     } else if (admissionKind === 'guest') {
-      setUiState('waiting');
-      setStatusMessage('Waiting in the green room for a cast member to let you in.');
+      setStatusMessage('Entering the green room...');
       const result = await admissionFetch('/admission/guest', {
         method: 'POST',
         body: JSON.stringify({ key: admissionKey }),
       });
       admissionIdentity = result.identity;
       usernameInput.value = sanitizeUsername(result.identity.username);
+      joinButton.textContent = '✓ In Green Room';
+      setUiState('waiting');
+      setStatusMessage('✓ Waiting in the green room for a cast member to let you in.');
       admissionToken = await waitForGuestApproval(result.id);
     } else {
       throw new Error('A valid cast or guest access link is required.');
@@ -239,6 +241,9 @@ async function onClickJoinButton() {
   } catch (error) {
     setUiState('ready');
     joinButton.disabled = false;
+    if (admissionKind === 'guest') {
+      joinButton.textContent = 'Enter Green Room';
+    }
     setStatusMessage(error instanceof Error ? error.message : String(error));
   }
 }
