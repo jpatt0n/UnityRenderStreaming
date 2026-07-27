@@ -11,6 +11,14 @@ let renderstreaming;
 let useWebSocket;
 /** @type {boolean} */
 let isTearingDown = false;
+/** @type {'cast'|'guest'|null} */
+let admissionKind = null;
+/** @type {string} */
+let admissionKey = '';
+/** @type {{username:string, profile:string, kind:string}|null} */
+let admissionIdentity = null;
+/** @type {string} */
+let admissionToken = '';
 
 const codecPreferences = document.getElementById('codecPreferences');
 const supportsSetCodecPreferences = window.RTCRtpTransceiver &&
@@ -127,6 +135,7 @@ async function setup() {
   await setupAudioInputSelect();
   await setupVideoInputSelect();
   restoreUsername();
+  await setupAdmission();
   updateMicState();
   updateWebcamState();
   if (settingsMenu) {
@@ -140,7 +149,7 @@ async function setup() {
 function setUiState(state) {
   document.body.dataset.state = state;
   const isConnected = state === 'connected';
-  const showSettings = state === 'ready' || state === 'disconnected';
+  const showSettings = state === 'ready' || state === 'disconnected' || state === 'waiting';
 
   if (settingsPanel) {
     settingsPanel.style.display = showSettings ? 'block' : 'none';
@@ -186,18 +195,55 @@ function showWarningIfNeeded(startupMode) {
   }
 }
 
-function onClickJoinButton() {
+async function onClickJoinButton() {
   const username = sanitizeUsername(usernameInput.value);
-  if (!username) {
+  if (admissionKind === 'cast' && !username) {
     setStatusMessage('Please enter a username to connect.');
     return;
   }
-  usernameInput.value = username;
-  saveUsername(username);
+  if (admissionKind === 'cast') {
+    usernameInput.value = username;
+    saveUsername(username);
+  }
+  joinButton.disabled = true;
   mediaReconnectAttempts = 0;
   setStatusMessage('');
 
-  setUiState('connecting');
+  preparePlayerForJoin();
+
+  try {
+    if (admissionKind === 'cast') {
+      const result = await admissionFetch('/admission/cast', {
+        method: 'POST',
+        body: JSON.stringify({ key: admissionKey, username }),
+      });
+      admissionIdentity = result.identity;
+      admissionToken = result.token;
+    } else if (admissionKind === 'guest') {
+      setUiState('waiting');
+      setStatusMessage('Waiting in the green room for a cast member to let you in.');
+      const result = await admissionFetch('/admission/guest', {
+        method: 'POST',
+        body: JSON.stringify({ key: admissionKey }),
+      });
+      admissionIdentity = result.identity;
+      usernameInput.value = sanitizeUsername(result.identity.username);
+      admissionToken = await waitForGuestApproval(result.id);
+    } else {
+      throw new Error('A valid cast or guest access link is required.');
+    }
+
+    setStatusMessage('Connecting...');
+    setUiState('connecting');
+    await setupRenderStreaming();
+  } catch (error) {
+    setUiState('ready');
+    joinButton.disabled = false;
+    setStatusMessage(error instanceof Error ? error.message : String(error));
+  }
+}
+
+function preparePlayerForJoin() {
   if (settingsMenu) {
     settingsMenu.hidden = true;
     if (settingsToggle) {
@@ -212,7 +258,6 @@ function onClickJoinButton() {
   if (webcamCheck && webcamCheck.checked) {
     void startWebcam();
   }
-  setupRenderStreaming();
 }
 
 async function onClickDisconnectButton() {
@@ -221,6 +266,12 @@ async function onClickDisconnectButton() {
 
 async function setupRenderStreaming() {
   codecPreferences.disabled = true;
+
+  if (!admissionToken || !admissionIdentity) {
+    throw new Error('Admission was not completed.');
+  }
+  window.RENDER_STREAMING_CONFIG = window.RENDER_STREAMING_CONFIG || {};
+  window.RENDER_STREAMING_CONFIG.sessionToken = admissionToken;
 
   const signaling = useWebSocket ? new WebSocketSignaling() : new Signaling();
   const config = getRTCConfiguration();
@@ -231,8 +282,7 @@ async function setupRenderStreaming() {
   renderstreaming.onGotOffer = setCodecPreferences;
 
   await renderstreaming.start();
-  const username = sanitizeUsername(usernameInput.value);
-  const connectionId = createConnectionId(username);
+  const connectionId = createConnectionId(admissionIdentity.username, admissionIdentity.profile);
   await renderstreaming.createConnection(connectionId);
   armMediaStartTimeout();
 }
@@ -827,13 +877,14 @@ if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
   });
 }
 
-function createConnectionId(username) {
+function createConnectionId(username, profile) {
   const base = username || 'guest';
+  const identityProfile = profile || 'guest';
   if (window.crypto && window.crypto.randomUUID) {
-    return `${base}_${window.crypto.randomUUID()}`;
+    return `${base}~${identityProfile}~${window.crypto.randomUUID()}`;
   }
   const rand = Math.random().toString(36).slice(2);
-  return `${base}_${rand}`;
+  return `${base}~${identityProfile}~${rand}`;
 }
 
 function sanitizeUsername(value) {
@@ -852,6 +903,72 @@ function restoreUsername() {
 
 function saveUsername(value) {
   window.localStorage.setItem('lg_username', value);
+}
+
+async function setupAdmission() {
+  const params = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+  if (params.has('cast')) {
+    admissionKind = 'cast';
+    admissionKey = params.get('cast') || '';
+    try {
+      const result = await admissionFetch('/admission/cast', {
+        method: 'POST',
+        body: JSON.stringify({ key: admissionKey }),
+      });
+      admissionIdentity = result.identity;
+      admissionToken = result.token;
+      usernameInput.value = sanitizeUsername(result.identity.username);
+      usernameInput.readOnly = false;
+      joinButton.disabled = false;
+      setStatusMessage('Cast pass recognized. You can change the username for testing.');
+    } catch (error) {
+      disableAdmission(error);
+    }
+  } else if (params.has('guest')) {
+    admissionKind = 'guest';
+    admissionKey = params.get('guest') || '';
+    usernameInput.value = '';
+    usernameInput.readOnly = true;
+    joinButton.textContent = 'Enter Green Room';
+    joinButton.disabled = false;
+    setStatusMessage('Check your microphone or webcam, then enter the green room.');
+  } else {
+    disableAdmission(new Error('This page requires a private cast or guest access link.'));
+  }
+
+}
+
+async function admissionFetch(path, init = {}) {
+  const baseUrl = (window.RENDER_STREAMING_CONFIG?.signalingBaseUrl || window.location.origin).replace(/\/$/, '');
+  const response = await fetch(`${baseUrl}${path}`, {
+    ...init,
+    headers: { 'Content-Type': 'application/json', ...(init.headers || {}) },
+  });
+  const payload = await response.json();
+  if (!response.ok) {
+    throw new Error(payload.error || 'Access could not be verified.');
+  }
+  return payload;
+}
+
+async function waitForGuestApproval(pendingId) {
+  while (true) {
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    const result = await admissionFetch(`/admission/guest/${encodeURIComponent(pendingId)}`);
+    if (result.status === 'approved' && result.token) {
+      admissionIdentity = result.identity;
+      usernameInput.value = sanitizeUsername(result.identity.username);
+      return result.token;
+    }
+  }
+}
+
+function disableAdmission(error) {
+  admissionKind = null;
+  admissionKey = '';
+  admissionToken = '';
+  joinButton.disabled = true;
+  setStatusMessage(error instanceof Error ? error.message : String(error));
 }
 
 /** @type {RTCStatsReport} */

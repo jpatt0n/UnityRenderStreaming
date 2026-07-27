@@ -1,34 +1,27 @@
 import Offer from './offer';
 import Answer from './answer';
 import Candidate from './candidate';
+import { AdmissionIdentity } from '../admission';
 
-let isPrivate: boolean;
+type ClientRole = 'legacy' | 'participant' | 'host';
+type ClientState = {
+  connectionIds: Set<string>;
+  role: ClientRole;
+  identity?: AdmissionIdentity;
+};
 
-// [{sessonId:[connectionId,...]}]
-const clients: Map<WebSocket, Set<string>> = new Map<WebSocket, Set<string>>();
-
-// [{connectionId:[sessionId1, sessionId2]}]
-const connectionPair: Map<string, [WebSocket, WebSocket]> = new Map<string, [WebSocket, WebSocket]>();
-
-function getOrCreateConnectionIds(session: WebSocket): Set<string> {
-  let connectionIds = null;
-  if (!clients.has(session)) {
-    connectionIds = new Set<string>();
-    clients.set(session, connectionIds);
-  }
-  connectionIds = clients.get(session);
-  return connectionIds;
-}
+let legacyPrivate = false;
+const clients = new Map<WebSocket, ClientState>();
+const connectionPair = new Map<string, [WebSocket, WebSocket]>();
 
 function reset(mode: string): void {
-  isPrivate = mode == "private";
+  legacyPrivate = mode == 'private';
 }
 
 function safeSend(ws: WebSocket, payload: string): boolean {
   if (!ws || ws.readyState !== 1) {
     return false;
   }
-
   try {
     ws.send(payload);
     return true;
@@ -38,43 +31,69 @@ function safeSend(ws: WebSocket, payload: string): boolean {
   }
 }
 
-function add(ws: WebSocket): void {
-  clients.set(ws, new Set<string>());
+function add(ws: WebSocket, role: ClientRole = 'legacy', identity?: AdmissionIdentity): void {
+  clients.set(ws, { connectionIds: new Set<string>(), role, identity });
 }
 
 function getConnectionIds(ws: WebSocket): string[] {
-  return Array.from(clients.get(ws) ?? []);
+  return Array.from(clients.get(ws)?.connectionIds ?? []);
 }
 
 function remove(ws: WebSocket): void {
-  const connectionIds = clients.get(ws);
-  if (!connectionIds) {
-    clients.delete(ws);
+  const state = clients.get(ws);
+  if (!state) {
     return;
   }
 
-  connectionIds.forEach(connectionId => {
+  state.connectionIds.forEach(connectionId => {
     const pair = connectionPair.get(connectionId);
     if (pair) {
       const otherSessionWs = pair[0] == ws ? pair[1] : pair[0];
       if (otherSessionWs) {
-        safeSend(otherSessionWs, JSON.stringify({ type: "disconnect", connectionId: connectionId }));
+        safeSend(otherSessionWs, JSON.stringify({ type: 'disconnect', connectionId }));
       }
     }
     connectionPair.delete(connectionId);
   });
-
   clients.delete(ws);
 }
 
+function isAllowed(ws: WebSocket, connectionId: string): boolean {
+  const state = clients.get(ws);
+  if (!state || state.role !== 'participant') {
+    return true;
+  }
+  const identity = state.identity;
+  const expectedPrefix = identity ? `${identity.username}~${identity.profile}~` : '';
+  const allowed = Boolean(expectedPrefix) && connectionId.startsWith(expectedPrefix);
+  if (!allowed) {
+    safeSend(ws, JSON.stringify({ type: 'error', message: 'Connection identity does not match admission session.' }));
+  }
+  return allowed;
+}
+
+function hosts(): WebSocket[] {
+  return Array.from(clients.entries())
+    .filter(([, state]) => state.role === 'host')
+    .map(([ws]) => ws);
+}
+
 function onConnect(ws: WebSocket, connectionId: string): void {
+  if (!isAllowed(ws, connectionId)) {
+    return;
+  }
+
+  const state = clients.get(ws);
+  if (!state) {
+    return;
+  }
+
   let polite = true;
-  if (isPrivate) {
+  if (state.role === 'legacy' && legacyPrivate) {
     if (connectionPair.has(connectionId)) {
       const pair = connectionPair.get(connectionId);
-
       if (pair[0] != null && pair[1] != null) {
-        safeSend(ws, JSON.stringify({ type: "error", message: `${connectionId}: This connection id is already used.` }));
+        safeSend(ws, JSON.stringify({ type: 'error', message: `${connectionId}: This connection id is already used.` }));
         return;
       } else if (pair[0] != null) {
         connectionPair.set(connectionId, [pair[0], ws]);
@@ -85,96 +104,112 @@ function onConnect(ws: WebSocket, connectionId: string): void {
     }
   }
 
-  const connectionIds = getOrCreateConnectionIds(ws);
-  connectionIds.add(connectionId);
-  safeSend(ws, JSON.stringify({ type: "connect", connectionId: connectionId, polite: polite }));
+  state.connectionIds.add(connectionId);
+  safeSend(ws, JSON.stringify({ type: 'connect', connectionId, polite }));
 }
 
 function onDisconnect(ws: WebSocket, connectionId: string): void {
-  const connectionIds = clients.get(ws);
-  connectionIds?.delete(connectionId);
-
-  if (connectionPair.has(connectionId)) {
-    const pair = connectionPair.get(connectionId);
+  if (!isAllowed(ws, connectionId)) {
+    return;
+  }
+  clients.get(ws)?.connectionIds.delete(connectionId);
+  const pair = connectionPair.get(connectionId);
+  if (pair) {
     const otherSessionWs = pair[0] == ws ? pair[1] : pair[0];
     if (otherSessionWs) {
-      safeSend(otherSessionWs, JSON.stringify({ type: "disconnect", connectionId: connectionId }));
+      safeSend(otherSessionWs, JSON.stringify({ type: 'disconnect', connectionId }));
     }
   }
   connectionPair.delete(connectionId);
-  safeSend(ws, JSON.stringify({ type: "disconnect", connectionId: connectionId }));
+  safeSend(ws, JSON.stringify({ type: 'disconnect', connectionId }));
 }
 
 function onOffer(ws: WebSocket, message: any): void {
   const connectionId = message.connectionId as string;
-  const newOffer = new Offer(message.sdp, Date.now(), false);
+  if (!isAllowed(ws, connectionId)) {
+    return;
+  }
 
-  if (isPrivate) {
-    if (connectionPair.has(connectionId)) {
-      const pair = connectionPair.get(connectionId);
-      const otherSessionWs = pair[0] == ws ? pair[1] : pair[0];
-      if (otherSessionWs) {
-        newOffer.polite = true;
-        safeSend(otherSessionWs, JSON.stringify({ from: connectionId, to: "", type: "offer", data: newOffer }));
-      }
+  const state = clients.get(ws);
+  const newOffer = new Offer(message.sdp, Date.now(), false);
+  if (state?.role === 'participant') {
+    connectionPair.set(connectionId, [ws, null]);
+    hosts().forEach(host => {
+      safeSend(host, JSON.stringify({ from: connectionId, to: '', type: 'offer', data: newOffer }));
+    });
+    return;
+  }
+
+  if (state?.role === 'host' || legacyPrivate) {
+    const pair = connectionPair.get(connectionId);
+    const otherSessionWs = pair ? (pair[0] == ws ? pair[1] : pair[0]) : null;
+    if (otherSessionWs) {
+      newOffer.polite = true;
+      safeSend(otherSessionWs, JSON.stringify({ from: connectionId, to: '', type: 'offer', data: newOffer }));
     }
     return;
   }
 
   connectionPair.set(connectionId, [ws, null]);
-  clients.forEach((_v, k) => {
-    if (k == ws) {
-      return;
+  clients.forEach((_state, client) => {
+    if (client !== ws) {
+      safeSend(client, JSON.stringify({ from: connectionId, to: '', type: 'offer', data: newOffer }));
     }
-    safeSend(k, JSON.stringify({ from: connectionId, to: "", type: "offer", data: newOffer }));
   });
 }
 
 function onAnswer(ws: WebSocket, message: any): void {
   const connectionId = message.connectionId as string;
-  const connectionIds = getOrCreateConnectionIds(ws);
-  connectionIds.add(connectionId);
-  const newAnswer = new Answer(message.sdp, Date.now());
-
-  if (!connectionPair.has(connectionId)) {
+  if (!isAllowed(ws, connectionId)) {
+    return;
+  }
+  const state = clients.get(ws);
+  state?.connectionIds.add(connectionId);
+  const pair = connectionPair.get(connectionId);
+  if (!pair) {
     return;
   }
 
-  const pair = connectionPair.get(connectionId);
   const otherSessionWs = pair[0] == ws ? pair[1] : pair[0];
-
   if (!otherSessionWs || !clients.has(otherSessionWs)) {
     return;
   }
-
-  if (!isPrivate) {
+  if (state?.role === 'host' || (!legacyPrivate && state?.role === 'legacy')) {
     connectionPair.set(connectionId, [otherSessionWs, ws]);
   }
 
-  safeSend(otherSessionWs, JSON.stringify({ from: connectionId, to: "", type: "answer", data: newAnswer }));
+  const newAnswer = new Answer(message.sdp, Date.now());
+  safeSend(otherSessionWs, JSON.stringify({ from: connectionId, to: '', type: 'answer', data: newAnswer }));
 }
 
 function onCandidate(ws: WebSocket, message: any): void {
-  const connectionId = message.connectionId;
-  const candidate = new Candidate(message.candidate, message.sdpMLineIndex, message.sdpMid, Date.now());
-
-  if (isPrivate) {
-    if (connectionPair.has(connectionId)) {
-      const pair = connectionPair.get(connectionId);
-      const otherSessionWs = pair[0] == ws ? pair[1] : pair[0];
-      if (otherSessionWs) {
-        safeSend(otherSessionWs, JSON.stringify({ from: connectionId, to: "", type: "candidate", data: candidate }));
-      }
-    }
+  const connectionId = message.connectionId as string;
+  if (!isAllowed(ws, connectionId)) {
     return;
   }
 
-  clients.forEach((_v, k) => {
-    if (k === ws) {
-      return;
-    }
-    safeSend(k, JSON.stringify({ from: connectionId, to: "", type: "candidate", data: candidate }));
-  });
+  const candidate = new Candidate(message.candidate, message.sdpMLineIndex, message.sdpMid, Date.now());
+  const payload = JSON.stringify({ from: connectionId, to: '', type: 'candidate', data: candidate });
+  const pair = connectionPair.get(connectionId);
+  const otherSessionWs = pair ? (pair[0] == ws ? pair[1] : pair[0]) : null;
+  if (otherSessionWs) {
+    safeSend(otherSessionWs, payload);
+    return;
+  }
+
+  const state = clients.get(ws);
+  if (state?.role === 'participant') {
+    hosts().forEach(host => safeSend(host, payload));
+    return;
+  }
+
+  if (state?.role === 'legacy' && !legacyPrivate) {
+    clients.forEach((_clientState, client) => {
+      if (client !== ws) {
+        safeSend(client, payload);
+      }
+    });
+  }
 }
 
 export { reset, add, getConnectionIds, remove, onConnect, onDisconnect, onOffer, onAnswer, onCandidate };

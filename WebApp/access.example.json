@@ -1,0 +1,19 @@
+{
+  "cast": [
+    {
+      "key": "replace-with-a-long-random-secret",
+      "defaultUsername": "hostbot",
+      "profile": "hostbot",
+      "allowUsernameOverride": true,
+      "enabled": true
+    }
+  ],
+  "guests": [
+    {
+      "key": "replace-with-a-different-long-random-secret",
+      "username": "guestname",
+      "enabled": true,
+      "expiresAt": "2026-12-31T23:59:59Z"
+    }
+  ]
+}

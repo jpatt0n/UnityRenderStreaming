@@ -10,6 +10,10 @@ function getWebSocketUrl() {
   if (url.pathname === "/") {
     url.pathname = "";
   }
+  const sessionToken = window.RENDER_STREAMING_CONFIG?.sessionToken;
+  if (sessionToken) {
+    url.searchParams.set('session', sessionToken);
+  }
   return url.toString();
 }
 
@@ -152,23 +156,24 @@ export class WebSocketSignaling extends EventTarget {
     this.sleep = msec => new Promise(resolve => setTimeout(resolve, msec));
 
     const websocketUrl = getWebSocketUrl();
+    const websocketLogUrl = websocketUrl.split('?')[0];
     this.websocket = new WebSocket(websocketUrl);
     this.connectionId = null;
 
     this.websocket.onopen = () => {
       this.isWsOpen = true;
-      Logger.info(`[signaling] WebSocket opened url=${websocketUrl}`);
+      Logger.info(`[signaling] WebSocket opened url=${websocketLogUrl}`);
     };
 
     this.websocket.onclose = (event) => {
       this.isWsOpen = false;
       Logger.warn(
-        `[signaling] WebSocket closed code=${event.code} reason=${event.reason || '(none)'} wasClean=${event.wasClean} url=${websocketUrl}`
+        `[signaling] WebSocket closed code=${event.code} reason=${event.reason || '(none)'} wasClean=${event.wasClean} url=${websocketLogUrl}`
       );
     };
 
     this.websocket.onerror = () => {
-      Logger.error(`[signaling] WebSocket error url=${websocketUrl} readyState=${this.websocket.readyState}`);
+      Logger.error(`[signaling] WebSocket error url=${websocketLogUrl} readyState=${this.websocket.readyState}`);
     };
 
     this.websocket.onmessage = (event) => {

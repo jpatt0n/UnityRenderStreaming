@@ -8,6 +8,7 @@ import { createServer } from './server';
 import { AddressInfo } from 'net';
 import WSSignaling from './websocket';
 import Options from './class/options';
+import { AdmissionService } from './admission';
 
 export class RenderStreaming {
   public static run(argv: string[]): RenderStreaming {
@@ -43,12 +44,14 @@ export class RenderStreaming {
   public app: express.Application;
 
   public server?: Server;
+  public hostServer?: Server;
 
   public options: Options;
 
   constructor(options: Options) {
     this.options = options;
-    this.app = createServer(this.options);
+    const admission = new AdmissionService();
+    this.app = createServer(this.options, admission);
     if (this.options.secure) {
       this.server = https.createServer({
         key: fs.readFileSync(options.keyfile),
@@ -81,7 +84,22 @@ export class RenderStreaming {
       console.log(`Use websocket for signaling server ws://${this.getIPAddress()[0]}`);
 
       //Start Websocket Signaling server
-      new WSSignaling(this.server, this.options.mode);
+      new WSSignaling(this.server, this.options.mode, {
+        role: 'participant',
+        authorize: request => {
+          const requestUrl = new URL(request.url ?? '/', 'http://localhost');
+          return admission.takeSession(requestUrl.searchParams.get('session') ?? '');
+        },
+      });
+
+      const hostPort = Number(process.env.HOST_PORT || 55056);
+      const hostApp = express();
+      hostApp.use(express.json());
+      hostApp.use('/admission', admission.createPrivateRouter());
+      this.hostServer = hostApp.listen(hostPort, '127.0.0.1', () => {
+        console.log(`Unity host signaling on ws://127.0.0.1:${hostPort}`);
+      });
+      new WSSignaling(this.hostServer, 'private', { role: 'host' });
     }
 
     console.log(`start as ${this.options.mode} mode`);

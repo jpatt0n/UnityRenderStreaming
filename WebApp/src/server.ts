@@ -6,10 +6,11 @@ import signaling from './signaling';
 import { log, LogLevel } from './log';
 import Options from './class/options';
 import { reset as resetHandler }from './class/httphandler';
+import { AdmissionService } from './admission';
 
 const cors = require('cors');
 
-export const createServer = (config: Options): express.Application => {
+export const createServer = (config: Options, admission?: AdmissionService): express.Application => {
   const app: express.Application = express();
   const basePath = '/rs';
   const publicDir = path.join(__dirname, '../client/public');
@@ -23,6 +24,9 @@ export const createServer = (config: Options): express.Application => {
   app.use(cors({origin: '*'}));
   app.use(express.urlencoded({ extended: true }));
   app.use(express.json());
+  if (admission) {
+    app.use('/admission', admission.createPublicRouter());
+  }
   const sendIndex = (res: express.Response): void => {
     const indexPagePath: string = path.join(publicDir, 'index.html');
     fs.access(indexPagePath, (err) => {

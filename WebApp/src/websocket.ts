@@ -1,11 +1,18 @@
 import * as websocket from "ws";
 import { Server } from 'http';
 import * as handler from "./class/websockethandler";
+import { AdmissionIdentity } from "./admission";
+import { IncomingMessage } from "http";
 
 type HeartbeatWebSocket = websocket.WebSocket & {
   isAlive: boolean;
   signalingSessionId: number;
   connectedAt: number;
+};
+
+type SignalingOptions = {
+  role?: 'legacy' | 'participant' | 'host';
+  authorize?: (request: IncomingMessage) => AdmissionIdentity | null;
 };
 
 export default class WSSignaling {
@@ -16,19 +23,24 @@ export default class WSSignaling {
   heartbeatTimer: NodeJS.Timeout;
   nextSessionId = 1;
 
-  constructor(server: Server, mode: string) {
+  constructor(server: Server, mode: string, options: SignalingOptions = {}) {
     this.server = server;
     this.wss = new websocket.Server({ server });
     handler.reset(mode);
 
-    this.wss.on('connection', (rawWs: websocket.WebSocket) => {
+    this.wss.on('connection', (rawWs: websocket.WebSocket, request: IncomingMessage) => {
       const ws = rawWs as HeartbeatWebSocket;
       const handlerWs = ws as unknown as WebSocket;
+      const identity = options.authorize ? options.authorize(request) : undefined;
+      if (options.authorize && !identity) {
+        ws.close(1008, 'A valid admission session is required.');
+        return;
+      }
       ws.isAlive = true;
       ws.signalingSessionId = this.nextSessionId++;
       ws.connectedAt = Date.now();
 
-      handler.add(handlerWs);
+      handler.add(handlerWs, options.role ?? 'legacy', identity ?? undefined);
       console.log(`[signaling] websocket opened session=${ws.signalingSessionId}`);
 
       ws.on('pong', () => {
