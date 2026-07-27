@@ -132,6 +132,25 @@ export class AdmissionService {
       res.json(this.publicPending(pending));
     });
 
+    router.post('/guest/preview', (req, res) => {
+      const config = this.loadConfig();
+      const key = String(req.body?.key ?? '');
+      const invite = config.guests.find(candidate => candidate.enabled !== false && safeEqual(candidate.key, key));
+      const expired = invite?.expiresAt && Date.parse(invite.expiresAt) <= Date.now();
+      if (!invite || expired) {
+        res.status(403).json({ error: 'This guest link is invalid, expired, or disabled.' });
+        return;
+      }
+
+      const username = sanitizeUsername(invite.username);
+      if (!username) {
+        res.status(500).json({ error: 'The guest invite is not configured correctly.' });
+        return;
+      }
+
+      res.json({ identity: { username, profile: 'guest', kind: 'guest' } });
+    });
+
     router.get('/guest/:id', (req, res) => {
       this.cleanup();
       const pending = this.pendingGuests.get(req.params.id);

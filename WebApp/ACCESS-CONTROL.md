@@ -18,9 +18,10 @@ signaling session. Cast passes define:
   for testing.
 
 Guest links use `#guest=<key>`. A guest invite supplies its username in the
-config. The guest enters the green room, waits for approval, and receives a
-short-lived signaling session only after a cast member presses their green
-approval button.
+config. Opening the link validates the invite and displays that username in a
+locked field without entering the green room. The guest enters the green room
+only after pressing the button, waits for approval, and receives a short-lived
+signaling session only after a cast member presses their green approval button.
 
 ## Username versus profile
 

@@ -927,11 +927,20 @@ async function setupAdmission() {
   } else if (params.has('guest')) {
     admissionKind = 'guest';
     admissionKey = params.get('guest') || '';
-    usernameInput.value = '';
     usernameInput.readOnly = true;
     joinButton.textContent = 'Enter Green Room';
-    joinButton.disabled = false;
-    setStatusMessage('Check your microphone or webcam, then enter the green room.');
+    try {
+      const result = await admissionFetch('/admission/guest/preview', {
+        method: 'POST',
+        body: JSON.stringify({ key: admissionKey }),
+      });
+      admissionIdentity = result.identity;
+      usernameInput.value = sanitizeUsername(result.identity.username);
+      joinButton.disabled = false;
+      setStatusMessage('Check your microphone or webcam, then enter the green room.');
+    } catch (error) {
+      disableAdmission(error);
+    }
   } else {
     disableAdmission(new Error('This page requires a private cast or guest access link.'));
   }
