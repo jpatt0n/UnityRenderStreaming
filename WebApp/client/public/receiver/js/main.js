@@ -346,6 +346,10 @@ async function teardownConnection(message, showReady = true) {
   }
   if (showReady) {
     setUiState('ready');
+    joinButton.disabled = admissionKind == null;
+    if (admissionKind === 'guest') {
+      joinButton.textContent = 'Enter Green Room';
+    }
   }
   isTearingDown = false;
 }
