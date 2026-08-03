@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Text;
 using NUnit.Framework;
 using Unity.RenderStreaming.InputSystem;
 using Unity.RenderStreaming.RuntimeTest.Signaling;
@@ -185,6 +186,9 @@ namespace Unity.RenderStreaming.RuntimeTest
         [UnityPlatform(exclude = new[] { RuntimePlatform.OSXPlayer, RuntimePlatform.IPhonePlayer })]
         public IEnumerator AddDevice()
         {
+            string inputHealth = null;
+            _channel1.OnMessage += bytes => inputHealth = Encoding.UTF8.GetString(bytes);
+
             var sender = new Sender();
             var senderInput = new InputRemoting(sender);
             var senderSubscriberDisposer = senderInput.Subscribe(new Observer(_channel1));
@@ -213,6 +217,7 @@ namespace Unity.RenderStreaming.RuntimeTest
 
             yield return new WaitUntil(() => device != null);
             yield return new WaitUntil(() => layoutName != null);
+            yield return new WaitUntil(() => inputHealth == Receiver.InputReady);
 
             Assert.That(device, Is.Not.Null);
             Assert.That(change, Is.EqualTo(InputDeviceChange.Added));
@@ -229,6 +234,21 @@ namespace Unity.RenderStreaming.RuntimeTest
             senderSubscriberDisposer.Dispose();
             receiverSubscriberDisposer.Dispose();
             sender.Dispose();
+            receiver.Dispose();
+        }
+
+        [UnityTest, Timeout(3000)]
+        public IEnumerator RequestsDeviceBootstrapWhenReceiverIsEmpty()
+        {
+            string inputHealth = null;
+            _channel1.OnMessage += bytes => inputHealth = Encoding.UTF8.GetString(bytes);
+
+            var receiver = new Receiver(_channel2);
+            _channel1.Send(Receiver.InputHealthProbe);
+
+            yield return new WaitUntil(() => inputHealth != null);
+
+            Assert.That(inputHealth, Is.EqualTo(Receiver.InputNeedsBootstrap));
             receiver.Dispose();
         }
 

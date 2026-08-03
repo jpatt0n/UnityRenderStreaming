@@ -108,6 +108,13 @@ export class InputRemoting {
     }
   }
 
+  resendDevices() {
+    if (!this._sending) {
+      return;
+    }
+    this._sendAllDevices();
+  }
+
   /**
    * 
    * @param {Observer} observer 

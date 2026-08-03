@@ -1,6 +1,11 @@
 import { Observer, Sender } from "../module/sender.js";
 import { InputRemoting } from "../module/inputremoting.js";
 
+const INPUT_HEALTH_PROBE = 'URS_INPUT_HEALTH';
+const INPUT_READY = 'URS_INPUT_READY';
+const INPUT_NEEDS_BOOTSTRAP = 'URS_INPUT_NEEDS_BOOTSTRAP';
+const INPUT_HEALTH_INTERVAL_MS = 1000;
+
 function getBasePath() {
   const globalConfig = window.RENDER_STREAMING_CONFIG || {};
   return globalConfig.basePath || (window.location.pathname.startsWith('/rs') ? '/rs' : '');
@@ -16,11 +21,14 @@ export class VideoPlayer {
     this.sender = null;
     this.inputObserver = null;
     this.inputSenderChannel = null;
+    this.inputHealthTimer = null;
+    this.inputReady = false;
     this._onMouseMoveHandler = this._mouseMove.bind(this);
     this._onMouseClickFullScreenHandler = this._mouseClickFullScreen.bind(this);
     this._onFullscreenChangeHandler = this._onFullscreenChange.bind(this);
     this._onOpenInputSenderChannelHandler = this._onOpenInputSenderChannel.bind(this);
     this._onCloseInputSenderChannelHandler = this._onCloseInputSenderChannel.bind(this);
+    this._onInputSenderChannelMessageHandler = this._onInputSenderChannelMessage.bind(this);
     this._onWindowKeyDownHandler = this._onWindowKeyDown.bind(this);
     this._onWindowBlurHandler = this._onWindowBlur.bind(this);
     this._onPageHideHandler = this._onPageHide.bind(this);
@@ -402,9 +410,11 @@ export class VideoPlayer {
       return;
     }
     if (this.inputSenderChannel) {
+      this._stopInputHealthChecks();
       if (this.inputSenderChannel.removeEventListener) {
         this.inputSenderChannel.removeEventListener('open', this._onOpenInputSenderChannelHandler);
         this.inputSenderChannel.removeEventListener('close', this._onCloseInputSenderChannelHandler);
+        this.inputSenderChannel.removeEventListener('message', this._onInputSenderChannelMessageHandler);
       } else {
         if (this.inputSenderChannel.onopen === this._onOpenInputSenderChannelHandler) {
           this.inputSenderChannel.onopen = null;
@@ -412,10 +422,14 @@ export class VideoPlayer {
         if (this.inputSenderChannel.onclose === this._onCloseInputSenderChannelHandler) {
           this.inputSenderChannel.onclose = null;
         }
+        if (this.inputSenderChannel.onmessage === this._onInputSenderChannelMessageHandler) {
+          this.inputSenderChannel.onmessage = null;
+        }
       }
     }
 
     this.inputSenderChannel = channel;
+    this.inputReady = false;
     if (!this.inputSenderChannel) {
       return;
     }
@@ -424,24 +438,64 @@ export class VideoPlayer {
     if (this.inputSenderChannel.addEventListener) {
       this.inputSenderChannel.addEventListener('open', this._onOpenInputSenderChannelHandler);
       this.inputSenderChannel.addEventListener('close', this._onCloseInputSenderChannelHandler);
+      this.inputSenderChannel.addEventListener('message', this._onInputSenderChannelMessageHandler);
     } else {
       this.inputSenderChannel.onopen = this._onOpenInputSenderChannelHandler;
       this.inputSenderChannel.onclose = this._onCloseInputSenderChannelHandler;
+      this.inputSenderChannel.onmessage = this._onInputSenderChannelMessageHandler;
     }
   }
 
   async _onOpenInputSenderChannel() {
-    if (!this.inputRemoting) {
+    const channel = this.inputSenderChannel;
+    if (!this.inputRemoting || !channel) {
       return;
     }
     await new Promise(resolve => setTimeout(resolve, 100));
+    if (channel !== this.inputSenderChannel || channel.readyState !== 'open') {
+      return;
+    }
     this.inputRemoting.startSending();
+    this._startInputHealthChecks(channel);
   }
 
   _onCloseInputSenderChannel() {
+    this._stopInputHealthChecks();
+    this.inputReady = false;
     if (!this.inputRemoting) {
       return;
     }
     this.inputRemoting.stopSending();
+  }
+
+  _onInputSenderChannelMessage(event) {
+    if (event.data === INPUT_READY) {
+      this.inputReady = true;
+      return;
+    }
+    if (event.data === INPUT_NEEDS_BOOTSTRAP) {
+      this.inputReady = false;
+      this.inputRemoting?.resendDevices();
+    }
+  }
+
+  _startInputHealthChecks(channel) {
+    this._stopInputHealthChecks();
+    const sendProbe = () => {
+      if (channel !== this.inputSenderChannel || channel.readyState !== 'open') {
+        this._stopInputHealthChecks();
+        return;
+      }
+      channel.send(INPUT_HEALTH_PROBE);
+    };
+    sendProbe();
+    this.inputHealthTimer = setInterval(sendProbe, INPUT_HEALTH_INTERVAL_MS);
+  }
+
+  _stopInputHealthChecks() {
+    if (this.inputHealthTimer != null) {
+      clearInterval(this.inputHealthTimer);
+      this.inputHealthTimer = null;
+    }
   }
 }

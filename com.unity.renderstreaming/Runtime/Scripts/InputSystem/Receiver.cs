@@ -16,6 +16,10 @@ namespace Unity.RenderStreaming.InputSystem
     /// </summary>
     partial class Receiver : InputManager, IDisposable
     {
+        internal const string InputHealthProbe = "URS_INPUT_HEALTH";
+        internal const string InputReady = "URS_INPUT_READY";
+        internal const string InputNeedsBootstrap = "URS_INPUT_NEEDS_BOOTSTRAP";
+
         public override event Action<InputRemoting.Message> onMessage;
         public new event Action<InputDevice, InputDeviceChange> onDeviceChange;
         public new event Action<string, InputControlLayoutChange> onLayoutChange;
@@ -53,6 +57,11 @@ namespace Unity.RenderStreaming.InputSystem
 
         public void Dispose()
         {
+            if (_channel != null)
+            {
+                _channel.OnMessage -= OnMessage;
+                _channel = null;
+            }
             RemoveAllRemoteDevices();
             RemoveAllRemoteLayouts();
             GC.SuppressFinalize(this);
@@ -60,8 +69,38 @@ namespace Unity.RenderStreaming.InputSystem
 
         private void OnMessage(byte[] bytes)
         {
+            if (MatchesControlMessage(bytes, InputHealthProbe))
+            {
+                SendInputHealth();
+                return;
+            }
+
             MessageSerializer.Deserialize(bytes, out var message);
             onMessage?.Invoke(message);
+
+            if (message.type == InputRemoting.MessageType.NewDevice)
+                SendInputHealth();
+        }
+
+        private static bool MatchesControlMessage(byte[] bytes, string message)
+        {
+            if (bytes == null || bytes.Length != message.Length)
+                return false;
+
+            for (var i = 0; i < bytes.Length; i++)
+            {
+                if (bytes[i] != message[i])
+                    return false;
+            }
+            return true;
+        }
+
+        private void SendInputHealth()
+        {
+            if (_channel == null || _channel.ReadyState != RTCDataChannelState.Open)
+                return;
+
+            _channel.Send(_remoteDevices.Count > 0 ? InputReady : InputNeedsBootstrap);
         }
 
         /// <summary>
