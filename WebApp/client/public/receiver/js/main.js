@@ -28,6 +28,11 @@ const statusDiv = document.getElementById('statusMessage');
 const statsDiv = document.getElementById('message');
 const statsPanel = document.getElementById('statsPanel');
 const statsToggle = document.getElementById('statsToggle');
+const connectedTools = document.getElementById('connectedTools');
+const inputSettingsToggle = document.getElementById('inputSettingsToggle');
+const inputSettingsPanel = document.getElementById('inputSettingsPanel');
+const mouseSensitivityRange = document.getElementById('mouseSensitivityRange');
+const mouseSensitivityNumber = document.getElementById('mouseSensitivityNumber');
 const settingsToggle = document.getElementById('settingsToggle');
 const settingsMenu = document.getElementById('settingsMenu');
 const settingsPanel = document.getElementById('settingsPanel');
@@ -53,6 +58,10 @@ const MEDIA_START_TIMEOUT_MS = 10000;
 const MEDIA_RECONNECT_DELAY_MS = 1000;
 const MAX_MEDIA_RECONNECT_ATTEMPTS = 3;
 const MICROPHONE_START_DELAY_MS = 500;
+const MOUSE_SENSITIVITY_STORAGE_KEY = 'lawgiven.mouseSensitivity';
+const MIN_MOUSE_SENSITIVITY = 0.1;
+const MAX_MOUSE_SENSITIVITY = 4;
+const DEFAULT_MOUSE_SENSITIVITY = 1;
 let inputChannel = null;
 let inputChannelOpenTimer = null;
 let inputChannelRecoveryTimer = null;
@@ -64,6 +73,7 @@ let micTransceiver = null;
 let webcamTransceiver = null;
 let localVideoStream = null;
 let localVideoTrack = null;
+let mouseSensitivity = readStoredMouseSensitivity();
 
 setup();
 
@@ -100,11 +110,61 @@ if (settingsToggle && settingsMenu) {
 if (statsToggle && statsPanel) {
   statsToggle.addEventListener('click', () => {
     const isOpen = !statsPanel.hidden;
+    closeInputSettings();
     statsPanel.hidden = isOpen;
     statsToggle.setAttribute('aria-expanded', (!isOpen).toString());
     statsToggle.classList.toggle('is-active', !isOpen);
   });
 }
+
+if (inputSettingsToggle && inputSettingsPanel) {
+  inputSettingsToggle.addEventListener('click', () => {
+    const isOpen = !inputSettingsPanel.hidden;
+    closeStatsPanel();
+    inputSettingsPanel.hidden = isOpen;
+    inputSettingsToggle.setAttribute('aria-expanded', (!isOpen).toString());
+    inputSettingsToggle.classList.toggle('is-active', !isOpen);
+  });
+}
+
+if (mouseSensitivityRange) {
+  mouseSensitivityRange.addEventListener('input', () => {
+    setMouseSensitivity(mouseSensitivityRange.value);
+  });
+}
+
+if (mouseSensitivityNumber) {
+  mouseSensitivityNumber.addEventListener('change', () => {
+    setMouseSensitivity(mouseSensitivityNumber.value);
+  });
+  mouseSensitivityNumber.addEventListener('keydown', event => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      mouseSensitivityNumber.blur();
+    }
+  });
+}
+
+for (const control of [mouseSensitivityRange, mouseSensitivityNumber]) {
+  control?.addEventListener('keydown', event => event.stopPropagation());
+  control?.addEventListener('keyup', event => event.stopPropagation());
+}
+
+document.addEventListener('pointerdown', event => {
+  if (!inputSettingsPanel || inputSettingsPanel.hidden) {
+    return;
+  }
+  if (inputSettingsPanel.contains(event.target) || inputSettingsToggle?.contains(event.target)) {
+    return;
+  }
+  closeInputSettings();
+});
+
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape') {
+    closeInputSettings();
+  }
+});
 
 if (webcamCheck) {
   webcamCheck.addEventListener('change', async () => {
@@ -138,6 +198,8 @@ async function setup() {
   await setupAdmission();
   updateMicState();
   updateWebcamState();
+  syncMouseSensitivityControls();
+  videoPlayer.setMouseSensitivity(mouseSensitivity);
   if (settingsMenu) {
     settingsMenu.hidden = true;
     if (settingsToggle) {
@@ -155,19 +217,82 @@ function setUiState(state) {
     settingsPanel.style.display = showSettings ? 'block' : 'none';
   }
 
-  if (statsToggle) {
-    statsToggle.hidden = !isConnected;
+  if (connectedTools) {
+    connectedTools.hidden = !isConnected;
   }
 
   if (disconnectButton) {
     disconnectButton.hidden = !isConnected;
   }
 
-  if (!isConnected && statsPanel && statsToggle) {
-    statsPanel.hidden = true;
-    statsToggle.classList.remove('is-active');
-    statsToggle.setAttribute('aria-expanded', 'false');
+  if (!isConnected) {
+    closeStatsPanel();
+    closeInputSettings();
   }
+}
+
+function normalizeMouseSensitivity(value) {
+  if (value == null || value === '') {
+    return null;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+  const clamped = Math.min(MAX_MOUSE_SENSITIVITY, Math.max(MIN_MOUSE_SENSITIVITY, parsed));
+  return Math.round(clamped * 10) / 10;
+}
+
+function readStoredMouseSensitivity() {
+  try {
+    return normalizeMouseSensitivity(localStorage.getItem(MOUSE_SENSITIVITY_STORAGE_KEY))
+      ?? DEFAULT_MOUSE_SENSITIVITY;
+  } catch {
+    return DEFAULT_MOUSE_SENSITIVITY;
+  }
+}
+
+function setMouseSensitivity(value) {
+  const normalized = normalizeMouseSensitivity(value);
+  if (normalized == null) {
+    syncMouseSensitivityControls();
+    return;
+  }
+  mouseSensitivity = normalized;
+  syncMouseSensitivityControls();
+  videoPlayer.setMouseSensitivity(mouseSensitivity);
+  try {
+    localStorage.setItem(MOUSE_SENSITIVITY_STORAGE_KEY, mouseSensitivity.toString());
+  } catch {
+    // Private browsing or storage policies can disable persistence.
+  }
+}
+
+function syncMouseSensitivityControls() {
+  if (mouseSensitivityRange) {
+    mouseSensitivityRange.value = mouseSensitivity.toString();
+  }
+  if (mouseSensitivityNumber) {
+    mouseSensitivityNumber.value = mouseSensitivity.toFixed(1);
+  }
+}
+
+function closeStatsPanel() {
+  if (!statsPanel || !statsToggle) {
+    return;
+  }
+  statsPanel.hidden = true;
+  statsToggle.classList.remove('is-active');
+  statsToggle.setAttribute('aria-expanded', 'false');
+}
+
+function closeInputSettings() {
+  if (!inputSettingsPanel || !inputSettingsToggle) {
+    return;
+  }
+  inputSettingsPanel.hidden = true;
+  inputSettingsToggle.classList.remove('is-active');
+  inputSettingsToggle.setAttribute('aria-expanded', 'false');
 }
 
 function setStatusMessage(message, isHtml = false) {

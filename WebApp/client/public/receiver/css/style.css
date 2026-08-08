@@ -333,6 +333,115 @@ body[data-state="waiting"] .status {
   color: #f5f5f5;
 }
 
+.connected-tools {
+  pointer-events: auto;
+  position: absolute;
+  top: 18px;
+  left: 18px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  z-index: 4;
+}
+
+.connected-tools .ghost-button {
+  position: static;
+}
+
+.connected-icon-button {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  background: rgba(10, 12, 15, 0.5);
+  color: rgba(255, 255, 255, 0.8);
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+}
+
+.connected-icon-button:hover,
+.connected-icon-button.is-active {
+  border-color: rgba(74, 163, 255, 0.8);
+  color: #ffffff;
+}
+
+.connected-icon-button:focus-visible,
+.connected-tools .ghost-button:focus-visible {
+  outline: 2px solid #74bcff;
+  outline-offset: 2px;
+}
+
+.connected-icon-button svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+
+.input-settings-panel {
+  pointer-events: auto;
+  position: absolute;
+  top: 60px;
+  left: 18px;
+  width: min(280px, calc(100vw - 36px));
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 12px;
+  background: rgba(10, 12, 15, 0.9);
+  color: #f5f5f5;
+  backdrop-filter: blur(10px);
+  z-index: 4;
+}
+
+.input-settings-title {
+  margin-bottom: 10px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.input-settings-panel label,
+.input-settings-hint {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.sensitivity-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.sensitivity-control input[type="range"] {
+  flex: 1 1 auto;
+  min-width: 0;
+  accent-color: #4aa3ff;
+}
+
+.sensitivity-control input[type="number"] {
+  width: 62px;
+  height: 34px;
+  box-sizing: border-box;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: rgba(5, 7, 10, 0.9);
+  color: #ffffff;
+  padding: 0 7px;
+  font: inherit;
+}
+
+.sensitivity-control input:focus-visible {
+  outline: 2px solid #74bcff;
+  outline-offset: 2px;
+}
+
+.input-settings-hint {
+  margin-top: 8px;
+}
+
 .ghost-button.disconnect {
   top: auto;
   bottom: 18px;
@@ -366,7 +475,8 @@ body[data-state="waiting"] .status {
   overflow: auto;
 }
 
-#statsToggle[hidden],
+#connectedTools[hidden],
+#inputSettingsPanel[hidden],
 #statsPanel[hidden],
 #disconnectButton[hidden] {
   display: none;
@@ -380,6 +490,17 @@ body[data-state="waiting"] .status {
   .ghost-button {
     top: 12px;
     left: 12px;
+  }
+
+  .connected-tools {
+    top: 12px;
+    left: 12px;
+  }
+
+  .input-settings-panel {
+    top: 54px;
+    left: 12px;
+    width: min(280px, calc(100vw - 24px));
   }
 
   .ghost-button.disconnect {

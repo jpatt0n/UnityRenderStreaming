@@ -20,6 +20,7 @@ export class Sender extends LocalInputManager {
     this._loggedKeyEvent = false;
     this._pressedKeys = new Set();
     this._altAsControlFallback = false;
+    this._mouseSensitivity = 1;
     this._corrector = new PointerCorrector(
       this._elem.videoWidth,
       this._elem.videoHeight,
@@ -91,6 +92,11 @@ export class Sender extends LocalInputManager {
     this._altAsControlFallback = next;
   }
 
+  setMouseSensitivity(value) {
+    const next = Number(value);
+    this._mouseSensitivity = Number.isFinite(next) && next > 0 ? next : 1;
+  }
+
   addGamepad() {
     const descriptionGamepad = {
       m_InterfaceName: "RawInput",
@@ -157,6 +163,11 @@ export class Sender extends LocalInputManager {
       this._loggedMouseEvent = true;
     }
     this.mouse.queueEvent(event);
+    if (event.type === 'mousemove' && (event.buttons & 2) !== 0) {
+      this.mouse.currentState.delta = this.mouse.currentState.delta.map(
+        value => value * this._mouseSensitivity
+      );
+    }
     this.mouse.currentState.position = this._corrector.map(this.mouse.currentState.position);
     this._queueStateEvent(this.mouse.currentState, this.mouse);
   }

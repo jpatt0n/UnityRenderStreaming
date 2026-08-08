@@ -23,6 +23,7 @@ export class VideoPlayer {
     this.inputSenderChannel = null;
     this.inputHealthTimer = null;
     this.inputReady = false;
+    this.mouseSensitivity = 1;
     this._onMouseMoveHandler = this._mouseMove.bind(this);
     this._onMouseClickFullScreenHandler = this._mouseClickFullScreen.bind(this);
     this._onFullscreenChangeHandler = this._onFullscreenChange.bind(this);
@@ -77,6 +78,14 @@ export class VideoPlayer {
     document.addEventListener('pointerlockchange', this._onPointerLockChangeHandler, false);
     document.addEventListener('mozpointerlockchange', this._onPointerLockChangeHandler, false);
     document.addEventListener('webkitpointerlockchange', this._onPointerLockChangeHandler, false);
+  }
+
+  setMouseSensitivity(value) {
+    const next = Number(value);
+    this.mouseSensitivity = Number.isFinite(next) && next > 0 ? next : 1;
+    if (this.sender && typeof this.sender.setMouseSensitivity === 'function') {
+      this.sender.setMouseSensitivity(this.mouseSensitivity);
+    }
   }
 
   _onLoadedVideo() {
@@ -378,6 +387,7 @@ export class VideoPlayer {
       this.sender.addMouse();
       this.sender.addKeyboard();
       this.sender.setAltAsControlFallback(true);
+      this.sender.setMouseSensitivity(this.mouseSensitivity);
       if (this._isTouchDevice()) {
         this.sender.addTouchscreen();
       }
