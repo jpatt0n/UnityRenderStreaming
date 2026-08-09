@@ -348,6 +348,26 @@ body[data-state="waiting"] .status {
   position: static;
 }
 
+.webcam-mode-controls {
+  pointer-events: auto;
+  position: absolute;
+  left: 18px;
+  bottom: 18px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  z-index: 4;
+}
+
+.webcam-mode-controls .ghost-button {
+  position: static;
+}
+
+.webcam-mode-controls .ghost-button:disabled {
+  cursor: wait;
+  opacity: 0.5;
+}
+
 .connected-icon-button {
   width: 32px;
   height: 32px;
@@ -457,7 +477,7 @@ body[data-state="waiting"] .status {
 .stats-panel {
   pointer-events: auto;
   position: absolute;
-  bottom: 18px;
+  bottom: 66px;
   left: 18px;
   width: 340px;
   max-width: calc(100vw - 36px);
@@ -478,6 +498,7 @@ body[data-state="waiting"] .status {
 #connectedTools[hidden],
 #inputSettingsPanel[hidden],
 #statsPanel[hidden],
+#webcamModeControls[hidden],
 #disconnectButton[hidden] {
   display: none;
 }
@@ -508,8 +529,15 @@ body[data-state="waiting"] .status {
     right: 12px;
   }
 
-  .stats-panel {
+  .webcam-mode-controls {
+    left: 12px;
     bottom: 12px;
+    max-width: calc(100vw - 96px);
+    flex-wrap: wrap;
+  }
+
+  .stats-panel {
+    bottom: 72px;
     left: 12px;
     right: 12px;
     max-width: none;

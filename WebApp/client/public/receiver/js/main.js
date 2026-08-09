@@ -38,6 +38,9 @@ const settingsMenu = document.getElementById('settingsMenu');
 const settingsPanel = document.getElementById('settingsPanel');
 const joinButton = document.getElementById('joinButton');
 const disconnectButton = document.getElementById('disconnectButton');
+const webcamModeControls = document.getElementById('webcamModeControls');
+const webcamPrimaryMode = document.getElementById('webcamPrimaryMode');
+const webcamSecondaryMode = document.getElementById('webcamSecondaryMode');
 const micStateLabel = document.getElementById('micStateLabel');
 const webcamCheck = document.getElementById('webcamCheck');
 const webcamStateLabel = document.getElementById('webcamStateLabel');
@@ -52,6 +55,7 @@ const micCheck = document.getElementById('micCheck');
 const audioSelect = document.querySelector('select#audioSource');
 const videoPlayer = new VideoPlayer();
 const INPUT_CHANNEL_LABEL = "input";
+const WEBCAM_CONTROL_CHANNEL_LABEL = "webcam-control";
 const INPUT_CHANNEL_OPEN_TIMEOUT_MS = 10000;
 const INPUT_CHANNEL_RECOVERY_DELAY_MS = 1500;
 const MEDIA_START_TIMEOUT_MS = 10000;
@@ -63,6 +67,10 @@ const MIN_MOUSE_SENSITIVITY = 0.1;
 const MAX_MOUSE_SENSITIVITY = 4;
 const DEFAULT_MOUSE_SENSITIVITY = 1;
 let inputChannel = null;
+let webcamControlChannel = null;
+let webcamControlRecoveryTimer = null;
+let webcamMode = 'tv-screen';
+let webcamModePending = false;
 let inputChannelOpenTimer = null;
 let inputChannelRecoveryTimer = null;
 let inputChannelRecovering = false;
@@ -97,6 +105,20 @@ if (joinButton) {
 
 if (disconnectButton) {
   disconnectButton.addEventListener('click', onClickDisconnectButton);
+}
+
+if (webcamPrimaryMode) {
+  webcamPrimaryMode.addEventListener('click', () => {
+    const nextMode = webcamMode === 'tv-man' ? 'tv-screen' : 'tv-man';
+    void requestWebcamMode(nextMode);
+  });
+}
+
+if (webcamSecondaryMode) {
+  webcamSecondaryMode.addEventListener('click', () => {
+    const nextMode = webcamMode === 'full-control' ? 'tv-screen' : 'full-control';
+    void requestWebcamMode(nextMode);
+  });
 }
 
 if (settingsToggle && settingsMenu) {
@@ -224,6 +246,8 @@ function setUiState(state) {
   if (disconnectButton) {
     disconnectButton.hidden = !isConnected;
   }
+
+  updateWebcamModeControls();
 
   if (!isConnected) {
     closeStatsPanel();
@@ -429,6 +453,7 @@ function onRemoteTrack(data) {
 
 async function onConnect() {
   createInputChannel();
+  createWebcamControlChannel();
   if (webcamCheck && webcamCheck.checked) {
     await startWebcam();
   }
@@ -461,6 +486,7 @@ async function teardownConnection(message, showReady = true) {
   }
 
   resetInputChannelState();
+  resetWebcamControlChannel();
   videoPlayer.deletePlayer();
   stopMicrophone();
   stopWebcam();
@@ -647,6 +673,147 @@ function resetInputChannelState() {
   inputChannel = null;
 }
 
+function createWebcamControlChannel() {
+  if (!renderstreaming || !(webcamCheck && webcamCheck.checked)) {
+    updateWebcamModeControls();
+    return;
+  }
+
+  if (webcamControlChannel &&
+      (webcamControlChannel.readyState === 'open' || webcamControlChannel.readyState === 'connecting')) {
+    return;
+  }
+
+  const channel = renderstreaming.createDataChannel(WEBCAM_CONTROL_CHANNEL_LABEL);
+  if (!channel) {
+    scheduleWebcamControlRecovery();
+    return;
+  }
+
+  webcamControlChannel = channel;
+  const onOpen = () => {
+    if (channel !== webcamControlChannel) {
+      return;
+    }
+    clearWebcamControlRecovery();
+    updateWebcamModeControls();
+  };
+  const onInterrupted = () => {
+    if (channel !== webcamControlChannel) {
+      return;
+    }
+    webcamControlChannel = null;
+    webcamModePending = false;
+    updateWebcamModeControls();
+    scheduleWebcamControlRecovery();
+  };
+  const onMessage = event => handleWebcamControlMessage(event.data);
+
+  if (channel.addEventListener) {
+    channel.addEventListener('open', onOpen);
+    channel.addEventListener('close', onInterrupted);
+    channel.addEventListener('error', onInterrupted);
+    channel.addEventListener('message', onMessage);
+  } else {
+    channel.onopen = onOpen;
+    channel.onclose = onInterrupted;
+    channel.onerror = onInterrupted;
+    channel.onmessage = onMessage;
+  }
+}
+
+function scheduleWebcamControlRecovery() {
+  if (!renderstreaming || isTearingDown || !(webcamCheck && webcamCheck.checked) || webcamControlRecoveryTimer != null) {
+    return;
+  }
+  webcamControlRecoveryTimer = setTimeout(() => {
+    webcamControlRecoveryTimer = null;
+    createWebcamControlChannel();
+  }, INPUT_CHANNEL_RECOVERY_DELAY_MS);
+}
+
+function clearWebcamControlRecovery() {
+  if (webcamControlRecoveryTimer != null) {
+    clearTimeout(webcamControlRecoveryTimer);
+    webcamControlRecoveryTimer = null;
+  }
+}
+
+function resetWebcamControlChannel() {
+  clearWebcamControlRecovery();
+  const channel = webcamControlChannel;
+  webcamControlChannel = null;
+  if (channel && channel.readyState !== 'closed') {
+    channel.close();
+  }
+  webcamMode = 'tv-screen';
+  webcamModePending = false;
+  updateWebcamModeControls();
+}
+
+function handleWebcamControlMessage(raw) {
+  if (typeof raw !== 'string') {
+    return;
+  }
+
+  let message;
+  try {
+    message = JSON.parse(raw);
+  } catch {
+    return;
+  }
+
+  if (message.type === 'state' && ['tv-screen', 'tv-man', 'full-control'].includes(message.mode)) {
+    webcamMode = message.mode;
+    webcamModePending = false;
+    setStatusMessage('');
+    updateWebcamModeControls();
+  } else if (message.type === 'error') {
+    webcamModePending = false;
+    setStatusMessage(message.error || 'Webcam mode change failed.');
+    updateWebcamModeControls();
+  }
+}
+
+async function requestWebcamMode(mode) {
+  if (!webcamControlChannel || webcamControlChannel.readyState !== 'open' || webcamModePending) {
+    setStatusMessage('Webcam controls are still connecting.');
+    return;
+  }
+
+  if (mode === 'tv-man' && !window.confirm('Enter TV Man? You will control the TV Man with clicks or WASD while the rest of the client controls stay locked.')) {
+    return;
+  }
+  if (mode === 'full-control' && !window.confirm('Enter Full Control? This enables the complete client interface and controls.')) {
+    return;
+  }
+
+  webcamModePending = true;
+  updateWebcamModeControls();
+  webcamControlChannel.send(JSON.stringify({ type: 'set-mode', mode }));
+}
+
+function updateWebcamModeControls() {
+  if (!webcamModeControls) {
+    return;
+  }
+
+  const visible = document.body.dataset.state === 'connected' && !!(webcamCheck && webcamCheck.checked);
+  webcamModeControls.hidden = !visible;
+  if (!visible) {
+    return;
+  }
+
+  if (webcamPrimaryMode) {
+    webcamPrimaryMode.textContent = webcamMode === 'tv-man' ? 'Return to TV Screen' : 'Enter TV Man';
+    webcamPrimaryMode.disabled = webcamModePending;
+  }
+  if (webcamSecondaryMode) {
+    webcamSecondaryMode.textContent = webcamMode === 'full-control' ? 'Return to TV Screen' : 'Enter Full Control';
+    webcamSecondaryMode.disabled = webcamModePending;
+  }
+}
+
 function setCodecPreferences() {
   /** @type {RTCRtpCodecCapability[] | null} */
   let selectedCodecs = null;
@@ -746,6 +913,7 @@ function updateWebcamState() {
       wrapper.classList.toggle('is-active', !!(webcamCheck && webcamCheck.checked && localVideoTrack));
     }
   }
+  updateWebcamModeControls();
 }
 
 let localAudioStream = null;
@@ -916,6 +1084,7 @@ async function startWebcam() {
     localVideoTrack.enabled = true;
     updateWebcamState();
     await ensureWebcamTrackAttached();
+    createWebcamControlChannel();
     return;
   }
 
@@ -932,12 +1101,14 @@ async function startWebcam() {
     if (webcamCheck) {
       webcamCheck.checked = false;
     }
+    resetWebcamControlChannel();
     updateWebcamState();
     return;
   }
 
   localVideoTrack = localVideoStream.getVideoTracks()[0];
   if (!localVideoTrack) {
+    resetWebcamControlChannel();
     return;
   }
 
@@ -947,6 +1118,7 @@ async function startWebcam() {
   }
   updateWebcamState();
   await ensureWebcamTrackAttached();
+  createWebcamControlChannel();
 }
 
 async function ensureWebcamTrackAttached() {
@@ -978,6 +1150,7 @@ function stopWebcam() {
   if (webcamPreview) {
     webcamPreview.srcObject = null;
   }
+  resetWebcamControlChannel();
   updateWebcamState();
 }
 
