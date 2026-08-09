@@ -349,21 +349,36 @@ body[data-state="waiting"] .status {
 }
 
 .webcam-mode-controls {
-  pointer-events: auto;
-  position: absolute;
-  left: 18px;
-  bottom: 18px;
-  display: flex;
-  align-items: center;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  padding-top: 12px;
+}
+
+.webcam-mode-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 8px;
-  z-index: 4;
+  margin-top: 8px;
 }
 
-.webcam-mode-controls .ghost-button {
-  position: static;
+.settings-action-button {
+  min-width: 0;
+  min-height: 38px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  background: rgba(5, 7, 10, 0.7);
+  color: rgba(255, 255, 255, 0.9);
+  padding: 7px 9px;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.25;
+  cursor: pointer;
 }
 
-.webcam-mode-controls .ghost-button:disabled {
+.settings-action-button:hover {
+  border-color: rgba(74, 163, 255, 0.8);
+}
+
+.settings-action-button:disabled {
   cursor: wait;
   opacity: 0.5;
 }
@@ -420,6 +435,15 @@ body[data-state="waiting"] .status {
   margin-bottom: 10px;
   font-size: 14px;
   font-weight: 600;
+}
+
+.input-settings-section + .input-settings-section {
+  margin-top: 12px;
+}
+
+.input-settings-section-title {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.75);
 }
 
 .input-settings-panel label,
@@ -527,13 +551,6 @@ body[data-state="waiting"] .status {
   .ghost-button.disconnect {
     bottom: 12px;
     right: 12px;
-  }
-
-  .webcam-mode-controls {
-    left: 12px;
-    bottom: 12px;
-    max-width: calc(100vw - 96px);
-    flex-wrap: wrap;
   }
 
   .stats-panel {
