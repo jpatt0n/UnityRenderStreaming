@@ -71,6 +71,7 @@ let webcamControlChannel = null;
 let webcamControlRecoveryTimer = null;
 let webcamMode = 'tv-screen';
 let webcamModePending = false;
+let webcamSessionActive = false;
 let inputChannelOpenTimer = null;
 let inputChannelRecoveryTimer = null;
 let inputChannelRecovering = false;
@@ -704,6 +705,7 @@ function createWebcamControlChannel() {
     }
     webcamControlChannel = null;
     webcamModePending = false;
+    webcamSessionActive = false;
     updateWebcamModeControls();
     scheduleWebcamControlRecovery();
   };
@@ -748,6 +750,7 @@ function resetWebcamControlChannel() {
   }
   webcamMode = 'tv-screen';
   webcamModePending = false;
+  webcamSessionActive = false;
   updateWebcamModeControls();
 }
 
@@ -766,7 +769,10 @@ function handleWebcamControlMessage(raw) {
   if (message.type === 'state' && ['tv-screen', 'tv-man', 'full-control'].includes(message.mode)) {
     webcamMode = message.mode;
     webcamModePending = false;
-    setStatusMessage('');
+    webcamSessionActive = message.active === true;
+    if (webcamSessionActive) {
+      setStatusMessage('');
+    }
     updateWebcamModeControls();
   } else if (message.type === 'error') {
     webcamModePending = false;
@@ -778,6 +784,10 @@ function handleWebcamControlMessage(raw) {
 async function requestWebcamMode(mode) {
   if (!webcamControlChannel || webcamControlChannel.readyState !== 'open' || webcamModePending) {
     setStatusMessage('Webcam controls are still connecting.');
+    return;
+  }
+  if (!webcamSessionActive) {
+    setStatusMessage('Webcam stream is still connecting to Unity.');
     return;
   }
 
@@ -806,11 +816,11 @@ function updateWebcamModeControls() {
 
   if (webcamPrimaryMode) {
     webcamPrimaryMode.textContent = webcamMode === 'tv-man' ? 'Return to TV Screen' : 'Enter TV Man';
-    webcamPrimaryMode.disabled = webcamModePending;
+    webcamPrimaryMode.disabled = webcamModePending || !webcamSessionActive;
   }
   if (webcamSecondaryMode) {
     webcamSecondaryMode.textContent = webcamMode === 'full-control' ? 'Return to TV Screen' : 'Enter Full Control';
-    webcamSecondaryMode.disabled = webcamModePending;
+    webcamSecondaryMode.disabled = webcamModePending || !webcamSessionActive;
   }
 }
 
