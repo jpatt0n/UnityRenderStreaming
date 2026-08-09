@@ -913,7 +913,13 @@ async function setupVideoInputSelect() {
 
 function updateWebcamState() {
   if (webcamStateLabel && webcamCheck) {
-    webcamStateLabel.textContent = webcamCheck.checked ? 'Enabled' : 'Disabled';
+    const settings = localVideoTrack && localVideoTrack.readyState === 'live'
+      ? localVideoTrack.getSettings?.()
+      : null;
+    const resolution = settings && settings.width && settings.height
+      ? ` · ${settings.width}×${settings.height}`
+      : '';
+    webcamStateLabel.textContent = webcamCheck.checked ? `Enabled${resolution}` : 'Disabled';
   }
   if (videoSelect) {
     videoSelect.disabled = !(webcamCheck && webcamCheck.checked);
@@ -1140,6 +1146,7 @@ async function startWebcamInternal() {
   }
 
   await requestHighestWebcamResolution(localVideoTrack);
+  localVideoTrack.contentHint = 'detail';
 
   if (webcamPreview) {
     webcamPreview.srcObject = localVideoStream;
@@ -1156,25 +1163,74 @@ async function requestHighestWebcamResolution(track) {
   }
 
   const capabilities = track.getCapabilities();
-  const preferred = {};
-  if (Number.isFinite(capabilities.width?.max)) {
-    preferred.width = { ideal: capabilities.width.max };
-  }
-  if (Number.isFinite(capabilities.height?.max)) {
-    preferred.height = { ideal: capabilities.height.max };
-  }
-  if (Number.isFinite(capabilities.frameRate?.max)) {
-    preferred.frameRate = { ideal: Math.min(capabilities.frameRate.max, 30) };
-  }
-
-  if (Object.keys(preferred).length === 0) {
+  const maxWidth = Number.isFinite(capabilities.width?.max) ? capabilities.width.max : 0;
+  const maxHeight = Number.isFinite(capabilities.height?.max) ? capabilities.height.max : 0;
+  if (!maxWidth || !maxHeight) {
     return;
   }
 
+  const maxFrameRate = Number.isFinite(capabilities.frameRate?.max)
+    ? Math.min(capabilities.frameRate.max, 30)
+    : 30;
+  const resolutions = [
+    [maxWidth, maxHeight],
+    [3840, 2160],
+    [2560, 1440],
+    [1920, 1080],
+    [1600, 1200],
+    [1280, 720]
+  ]
+    .filter(([width, height]) => width <= maxWidth && height <= maxHeight)
+    .filter(([width, height], index, values) =>
+      values.findIndex(candidate => candidate[0] === width && candidate[1] === height) === index)
+    .sort((a, b) => (b[0] * b[1]) - (a[0] * a[1]));
+
+  for (const [width, height] of resolutions) {
+    try {
+      await track.applyConstraints({
+        width: { exact: width },
+        height: { exact: height },
+        frameRate: { ideal: maxFrameRate }
+      });
+      const settings = track.getSettings?.() || {};
+      console.info(`Webcam negotiated at ${settings.width || width}×${settings.height || height}.`);
+      return;
+    } catch {
+      // The device can advertise independent maxima that are not a supported pair.
+      // Continue through common resolutions from highest to lowest.
+    }
+  }
+
   try {
-    await track.applyConstraints(preferred);
+    await track.applyConstraints({
+      width: { ideal: maxWidth },
+      height: { ideal: maxHeight },
+      frameRate: { ideal: maxFrameRate }
+    });
   } catch (error) {
     console.warn('Could not apply the webcam maximum-resolution preference.', error);
+  }
+}
+
+async function configureWebcamSender(sender) {
+  if (!sender || typeof sender.getParameters !== 'function' || typeof sender.setParameters !== 'function') {
+    return;
+  }
+
+  const settings = localVideoTrack?.getSettings?.() || {};
+  const pixels = (settings.width || 1920) * (settings.height || 1080);
+  const maxBitrate = pixels >= 3840 * 2160 ? 20000000 : pixels >= 1920 * 1080 ? 8000000 : 4000000;
+  const parameters = sender.getParameters();
+  parameters.degradationPreference = 'maintain-resolution';
+  for (const encoding of parameters.encodings || []) {
+    encoding.maxBitrate = Math.max(encoding.maxBitrate || 0, maxBitrate);
+    encoding.scaleResolutionDownBy = 1;
+  }
+
+  try {
+    await sender.setParameters(parameters);
+  } catch (error) {
+    console.warn('Could not apply the webcam high-resolution sender preference.', error);
   }
 }
 
@@ -1186,6 +1242,7 @@ async function ensureWebcamTrackAttached() {
   if (webcamTransceiver && webcamTransceiver.sender) {
     try {
       await webcamTransceiver.sender.replaceTrack(localVideoTrack);
+      await configureWebcamSender(webcamTransceiver.sender);
       return;
     } catch (err) {
       // fall through to create a new transceiver
@@ -1193,6 +1250,7 @@ async function ensureWebcamTrackAttached() {
   }
 
   webcamTransceiver = renderstreaming.addTransceiver(localVideoTrack, { direction: 'sendonly' });
+  await configureWebcamSender(webcamTransceiver?.sender);
 }
 
 function stopWebcam() {

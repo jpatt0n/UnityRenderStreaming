@@ -81,7 +81,11 @@ namespace Unity.RenderStreaming
 
             if (Channel.ReadyState == RTCDataChannelState.Open && !IsLocal)
             {
-                OnStartedChannel?.Invoke(connectionId);
+                // A remotely-created data channel can already be open by the time the
+                // signaling handler assigns it. Route that case through the same virtual
+                // callback as the normal OnOpen event so derived channels can send their
+                // initial state instead of only receiving the generic started notification.
+                OnOpen(connectionId);
             }
         }
 
