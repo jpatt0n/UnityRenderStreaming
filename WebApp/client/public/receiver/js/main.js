@@ -82,6 +82,7 @@ let micTransceiver = null;
 let webcamTransceiver = null;
 let localVideoStream = null;
 let localVideoTrack = null;
+let webcamStartPromise = null;
 let mouseSensitivity = readStoredMouseSensitivity();
 
 setup();
@@ -1089,6 +1090,19 @@ function updateMicState() {
 }
 
 async function startWebcam() {
+  if (webcamStartPromise) {
+    return webcamStartPromise;
+  }
+
+  webcamStartPromise = startWebcamInternal();
+  try {
+    await webcamStartPromise;
+  } finally {
+    webcamStartPromise = null;
+  }
+}
+
+async function startWebcamInternal() {
 
   if (localVideoTrack && localVideoTrack.readyState === 'live') {
     localVideoTrack.enabled = true;
@@ -1100,7 +1114,10 @@ async function startWebcam() {
 
   const constraints = {
     video: {
-      deviceId: videoSelect && videoSelect.value ? { exact: videoSelect.value } : undefined
+      deviceId: videoSelect && videoSelect.value ? { exact: videoSelect.value } : undefined,
+      width: { ideal: 3840 },
+      height: { ideal: 2160 },
+      frameRate: { ideal: 30 }
     }
   };
 
@@ -1122,6 +1139,8 @@ async function startWebcam() {
     return;
   }
 
+  await requestHighestWebcamResolution(localVideoTrack);
+
   if (webcamPreview) {
     webcamPreview.srcObject = localVideoStream;
     webcamPreview.play?.().catch(() => {});
@@ -1129,6 +1148,34 @@ async function startWebcam() {
   updateWebcamState();
   await ensureWebcamTrackAttached();
   createWebcamControlChannel();
+}
+
+async function requestHighestWebcamResolution(track) {
+  if (!track || typeof track.getCapabilities !== 'function' || typeof track.applyConstraints !== 'function') {
+    return;
+  }
+
+  const capabilities = track.getCapabilities();
+  const preferred = {};
+  if (Number.isFinite(capabilities.width?.max)) {
+    preferred.width = { ideal: capabilities.width.max };
+  }
+  if (Number.isFinite(capabilities.height?.max)) {
+    preferred.height = { ideal: capabilities.height.max };
+  }
+  if (Number.isFinite(capabilities.frameRate?.max)) {
+    preferred.frameRate = { ideal: Math.min(capabilities.frameRate.max, 30) };
+  }
+
+  if (Object.keys(preferred).length === 0) {
+    return;
+  }
+
+  try {
+    await track.applyConstraints(preferred);
+  } catch (error) {
+    console.warn('Could not apply the webcam maximum-resolution preference.', error);
+  }
 }
 
 async function ensureWebcamTrackAttached() {
