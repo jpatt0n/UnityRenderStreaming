@@ -4,15 +4,16 @@ body.rs-app {
   background: #0d0f12;
   color: #f5f5f5;
   min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 16px;
+  padding: clamp(12px, 2vw, 24px);
   box-sizing: border-box;
 }
 
 body.rs-app #container {
-  width: min(100%, calc((100vh - 32px) * 16 / 9));
+  width: min(100%, 1680px, calc((100dvh - 48px) * 16 / 9));
   max-width: 100%;
   margin: 0 auto;
 }
@@ -29,4 +30,17 @@ body.rs-app #warning {
   margin: 16px;
   padding: 12px 16px;
   border-radius: 10px;
+}
+
+@media screen and (max-width: 700px) {
+  body.rs-app {
+    display: block;
+    min-height: 100dvh;
+    padding: 0;
+  }
+
+  body.rs-app #container {
+    width: 100%;
+    min-height: 100dvh;
+  }
 }
