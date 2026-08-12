@@ -11,6 +11,26 @@ import { LocalInputManager } from "./inputremoting.js";
 import { GamepadHandler } from "./gamepadhandler.js";
 import { PointerCorrector } from "./pointercorrect.js";
 
+/**
+ * The streamed application's quickcam keys, taken from the browser so they reach the game.
+ *
+ * F1-F4 are the primary form and are claimed on their own. Chrome puts help on F1 and find on F3,
+ * but neither is reserved, so cancelling the keydown is enough.
+ */
+const APP_CLAIMED_KEYS = new Set(['F1', 'F2', 'F3', 'F4']);
+
+/**
+ * The fallback form: the same four as Ctrl + digit.
+ *
+ * Chrome maps Ctrl+1..8 to "switch to tab N", but unlike Ctrl+T or Ctrl+W those are not reserved
+ * either. Firefox and Safari do reserve theirs, so there the chord only lands while the player is
+ * fullscreen and the Keyboard Lock API (see videoplayer.js) is holding these codes.
+ */
+const APP_CLAIMED_MODIFIER_DIGITS = new Set([
+  'Digit1', 'Digit2', 'Digit3', 'Digit4',
+  'Numpad1', 'Numpad2', 'Numpad3', 'Numpad4'
+]);
+
 export class Sender extends LocalInputManager {
   constructor(elem) {
     super();
@@ -21,6 +41,8 @@ export class Sender extends LocalInputManager {
     this._pressedKeys = new Set();
     this._altAsControlFallback = false;
     this._mouseSensitivity = 1;
+    this._handheldMirror = false;
+    this._handheldOwnedPointerLock = false;
     this._corrector = new PointerCorrector(
       this._elem.videoWidth,
       this._elem.videoHeight,
@@ -36,6 +58,8 @@ export class Sender extends LocalInputManager {
     this._onWindowBlurHandler = this._onWindowBlur.bind(this);
     this._onPageHideHandler = this._onPageHide.bind(this);
     this._onVisibilityChangeHandler = this._onVisibilityChange.bind(this);
+    this._onPointerLockChangeHandler = this._onPointerLockChange.bind(this);
+    document.addEventListener('pointerlockchange', this._onPointerLockChangeHandler, false);
 
     //since line 27 cannot complete resize initialization but can only monitor div dimension changes, line 26 needs to be reserved
     this._elem.addEventListener('resize', this._onResizeEventHandler, false);
@@ -163,7 +187,10 @@ export class Sender extends LocalInputManager {
       this._loggedMouseEvent = true;
     }
     this.mouse.queueEvent(event);
-    if (event.type === 'mousemove' && (event.buttons & 2) !== 0) {
+    // Every mouse delta is scaled, not just right-drag ones. Delta is only ever read as camera
+    // movement, and the application now has camera modes - the handheld camera above all - that pan
+    // without a button held; those have to answer the same speed setting as a right-drag does.
+    if (event.type === 'mousemove') {
       this.mouse.currentState.delta = this.mouse.currentState.delta.map(
         value => value * this._mouseSensitivity
       );
@@ -180,17 +207,24 @@ export class Sender extends LocalInputManager {
     if (!code) {
       return;
     }
+    const isAppClaimedChord = this._isAppClaimedChord(event);
+    if (isAppClaimedChord) {
+      // Held back from the browser so the key reaches the application rather than opening help or
+      // switching tabs.
+      event.preventDefault();
+    }
     if(event.type == 'keydown') {
       if(!event.repeat) { // StateEvent
         this._pressedKeys.add(code);
         this.keyboard.queueEvent({ type: 'keydown', code: code });
         this._queueStateEvent(this.keyboard.currentState, this.keyboard);
+        this._updateHandheldMirror(event);
         if (!this._loggedKeyEvent) {
           this._loggedKeyEvent = true;
         }
       }
       // TextEvent
-      if (this._isTextInputKey(event)) {
+      if (!isAppClaimedChord && this._isTextInputKey(event)) {
         this._queueTextEvent(this.keyboard, event);
       }
     }
@@ -199,6 +233,110 @@ export class Sender extends LocalInputManager {
       this.keyboard.queueEvent({ type: 'keyup', code: code });
       this._queueStateEvent(this.keyboard.currentState, this.keyboard);
     }
+  }
+
+  /**
+   * True for a key the application owns: one of its bare function keys, or the modifier + digit
+   * fallback for the same four.
+   *
+   * Alt counts alongside Ctrl on the digits because outside fullscreen the sender already stands
+   * Alt in for Control (see `setAltAsControlFallback`), so Alt+1 is how a windowed player types
+   * Ctrl+1. AltGr - which Windows reports as Ctrl+Alt - is left alone: on many layouts it produces
+   * a real character, and swallowing it would break typing.
+   */
+  _isAppClaimedChord(event) {
+    if (!event || !event.code) {
+      return false;
+    }
+    if (APP_CLAIMED_KEYS.has(event.code)) {
+      return true;
+    }
+    if (!APP_CLAIMED_MODIFIER_DIGITS.has(event.code)) {
+      return false;
+    }
+    if (event.ctrlKey && event.altKey) {
+      return false;
+    }
+    return event.ctrlKey || event.metaKey || (this._altAsControlFallback && event.altKey);
+  }
+
+  /**
+   * The application's handheld camera (F4 / Ctrl+4, Esc to exit) pans on bare mouse movement, so
+   * while it is up the OS cursor must not exist to run into a window edge and stall the pan. Only
+   * the page can reach the Pointer Lock API, so the handheld's own keys are mirrored here and the
+   * lock follows them. The mirror can drift if the application drops the handheld on its own (a
+   * cut from another client, a mode change); Esc or F4 puts both sides right.
+   */
+  _updateHandheldMirror(event) {
+    if (this._isHandheldToggleChord(event)) {
+      if (this._handheldMirror) {
+        this._releaseHandheldPointerLock();
+      } else {
+        this._captureHandheldPointerLock();
+      }
+      return;
+    }
+    if (event.code === 'Escape' && this._handheldMirror) {
+      this._releaseHandheldPointerLock();
+    }
+  }
+
+  _isHandheldToggleChord(event) {
+    if (event.code === 'F4') {
+      return true;
+    }
+    return (event.code === 'Digit4' || event.code === 'Numpad4') && this._isAppClaimedChord(event);
+  }
+
+  _captureHandheldPointerLock() {
+    this._handheldMirror = true;
+    if (document.pointerLockElement) {
+      // Someone else's lock (the fullscreen lock-mouse option) is already holding the cursor.
+      // Riding it rather than owning it means lowering the handheld will not tear it down.
+      this._handheldOwnedPointerLock = false;
+      return;
+    }
+    if (!this._elem.requestPointerLock) {
+      return;
+    }
+    this._handheldOwnedPointerLock = true;
+    const request = this._elem.requestPointerLock();
+    if (request && request.catch) {
+      request.catch(() => { this._handheldOwnedPointerLock = false; });
+    }
+  }
+
+  _releaseHandheldPointerLock() {
+    this._handheldMirror = false;
+    if (this._handheldOwnedPointerLock &&
+        document.pointerLockElement === this._elem &&
+        document.exitPointerLock) {
+      document.exitPointerLock();
+    }
+    this._handheldOwnedPointerLock = false;
+  }
+
+  _onPointerLockChange() {
+    if (!this._handheldMirror || document.pointerLockElement) {
+      return;
+    }
+    // The lock fell away without any exit key being seen: the browser swallows the Esc that ends a
+    // pointer lock, and Alt+Tab never reaches the page at all. The application still has the
+    // handheld up, so the Esc it never received is forwarded by hand - one press lowers the
+    // camera in both worlds.
+    this._handheldMirror = false;
+    this._handheldOwnedPointerLock = false;
+    this._sendKeyTap('Escape');
+  }
+
+  _sendKeyTap(code) {
+    if (!this.keyboard) {
+      return;
+    }
+    this.keyboard.queueEvent({ type: 'keydown', code: code });
+    this._queueStateEvent(this.keyboard.currentState, this.keyboard);
+    this.keyboard.queueEvent({ type: 'keyup', code: code });
+    this._queueStateEvent(this.keyboard.currentState, this.keyboard);
   }
 
   _resolveKeyCode(event) {
@@ -315,6 +453,8 @@ export class Sender extends LocalInputManager {
 
   dispose() {
     this.releaseAllInputs();
+    this._releaseHandheldPointerLock();
+    document.removeEventListener('pointerlockchange', this._onPointerLockChangeHandler, false);
     this._elem.removeEventListener('resize', this._onResizeEventHandler, false);
     if (this._resizeObserver) {
       this._resizeObserver.disconnect();
