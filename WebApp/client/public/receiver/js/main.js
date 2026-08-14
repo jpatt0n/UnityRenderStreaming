@@ -25,6 +25,10 @@ const supportsSetCodecPreferences = window.RTCRtpTransceiver &&
   'setCodecPreferences' in window.RTCRtpTransceiver.prototype;
 
 const statusDiv = document.getElementById('statusMessage');
+const greenRoomBanner = document.getElementById('greenRoomBanner');
+const greenRoomTitle = document.getElementById('greenRoomTitle');
+const greenRoomDetail = document.getElementById('greenRoomDetail');
+const micToggleButton = document.getElementById('micToggleButton');
 const statsDiv = document.getElementById('message');
 const statsPanel = document.getElementById('statsPanel');
 const statsToggle = document.getElementById('statsToggle');
@@ -56,6 +60,8 @@ const audioSelect = document.querySelector('select#audioSource');
 const videoPlayer = new VideoPlayer();
 const INPUT_CHANNEL_LABEL = "input";
 const WEBCAM_CONTROL_CHANNEL_LABEL = "webcam-control";
+const GREEN_ROOM_CHANNEL_LABEL = "green-room";
+const GREEN_ROOM_ADMITTED_BANNER_MS = 6000;
 const INPUT_CHANNEL_OPEN_TIMEOUT_MS = 10000;
 const INPUT_CHANNEL_RECOVERY_DELAY_MS = 1500;
 const MEDIA_START_TIMEOUT_MS = 10000;
@@ -69,6 +75,16 @@ const DEFAULT_MOUSE_SENSITIVITY = 1;
 let inputChannel = null;
 let webcamControlChannel = null;
 let webcamControlRecoveryTimer = null;
+let greenRoomChannel = null;
+let greenRoomRecoveryTimer = null;
+let greenRoomBannerTimer = null;
+/**
+ * Whether this page is a guest's, and so subject to the green room at all. Cast members are never
+ * held: their pass already says they belong in the room.
+ */
+let isGreenRoomGuest = false;
+/** Whether the show has let this guest in. Unity is the only thing that sets it. */
+let greenRoomAdmitted = false;
 let webcamMode = 'tv-screen';
 let webcamModePending = false;
 let webcamSessionActive = false;
@@ -235,7 +251,7 @@ async function setup() {
 function setUiState(state) {
   document.body.dataset.state = state;
   const isConnected = state === 'connected';
-  const showSettings = state === 'ready' || state === 'disconnected' || state === 'waiting';
+  const showSettings = state === 'ready' || state === 'disconnected';
 
   if (settingsPanel) {
     settingsPanel.style.display = showSettings ? 'block' : 'none';
@@ -250,6 +266,7 @@ function setUiState(state) {
   }
 
   updateWebcamModeControls();
+  updateGreenRoomBanner();
 
   if (!isConnected) {
     closeStatsPanel();
@@ -371,22 +388,21 @@ async function onClickJoinButton() {
       admissionIdentity = result.identity;
       admissionToken = result.token;
     } else if (admissionKind === 'guest') {
+      // The green room is inside the show now: this session connects them straight away, and Unity
+      // holds them off air rather than the signaling host holding them outside.
       setStatusMessage('Entering the green room...');
       const result = await admissionFetch('/admission/guest', {
         method: 'POST',
         body: JSON.stringify({ key: admissionKey }),
       });
       admissionIdentity = result.identity;
+      admissionToken = result.token;
       usernameInput.value = sanitizeUsername(result.identity.username);
-      joinButton.textContent = '✓ In Green Room';
-      setUiState('waiting');
-      setStatusMessage('✓ Waiting in the green room for a cast member to let you in.');
-      admissionToken = await waitForGuestApproval(result.id);
     } else {
       throw new Error('A valid cast or guest access link is required.');
     }
 
-    setStatusMessage('Connecting...');
+    setStatusMessage(isGreenRoomGuest ? 'Entering the green room...' : 'Connecting...');
     setUiState('connecting');
     await setupRenderStreaming();
   } catch (error) {
@@ -411,7 +427,7 @@ function preparePlayerForJoin() {
   // Call play() while the Join click still carries browser user activation.
   // Waiting for loadedmetadata is too late for streams that include audio.
   videoPlayer.startPlayback();
-  if (webcamCheck && webcamCheck.checked) {
+  if (webcamCheck && webcamCheck.checked && mayGoLive()) {
     void startWebcam();
   }
 }
@@ -455,8 +471,9 @@ function onRemoteTrack(data) {
 
 async function onConnect() {
   createInputChannel();
+  createGreenRoomChannel();
   createWebcamControlChannel();
-  if (webcamCheck && webcamCheck.checked) {
+  if (webcamCheck && webcamCheck.checked && mayGoLive()) {
     await startWebcam();
   }
   if (mediaReconnectAttempts === 0) {
@@ -489,6 +506,7 @@ async function teardownConnection(message, showReady = true) {
 
   resetInputChannelState();
   resetWebcamControlChannel();
+  resetGreenRoomChannel();
   videoPlayer.deletePlayer();
   stopMicrophone();
   stopWebcam();
@@ -497,6 +515,11 @@ async function teardownConnection(message, showReady = true) {
   if (supportsSetCodecPreferences) {
     codecPreferences.disabled = false;
   }
+  // Admission does not survive the connection that carried it. A guest who reconnects arrives in
+  // the green room again, which is also what Unity does with them.
+  greenRoomAdmitted = false;
+  updateGreenRoomBanner();
+  updateMicState();
   if (showReady) {
     setUiState('ready');
     joinButton.disabled = admissionKind == null;
@@ -521,7 +544,10 @@ function armMediaStartTimeout() {
       return;
     }
 
-    if (mediaReconnectAttempts >= MAX_MEDIA_RECONNECT_ATTEMPTS) {
+    // A guest is expected to arrive before the show does, now that entering the green room means
+    // connecting to it. Giving up after three tries would strand anyone early, so they keep waiting
+    // and are told they are waiting for the show rather than told to restart Unity.
+    if (!isGreenRoomGuest && mediaReconnectAttempts >= MAX_MEDIA_RECONNECT_ATTEMPTS) {
       setStatusMessage('No video received. Restart Unity Play mode, then click Disconnect and Join.');
       return;
     }
@@ -529,7 +555,9 @@ function armMediaStartTimeout() {
     mediaReconnectAttempts++;
     await teardownConnection('', false);
     await new Promise(resolve => setTimeout(resolve, MEDIA_RECONNECT_DELAY_MS));
-    setStatusMessage(`Waiting for Unity video. Reconnecting (${mediaReconnectAttempts}/${MAX_MEDIA_RECONNECT_ATTEMPTS})...`);
+    setStatusMessage(isGreenRoomGuest
+      ? 'Waiting for the show to come up. You will be connected to the green room automatically.'
+      : `Waiting for Unity video. Reconnecting (${mediaReconnectAttempts}/${MAX_MEDIA_RECONNECT_ATTEMPTS})...`);
     setUiState('connecting');
     videoPlayer.createPlayer(playerDiv, lockMouseCheck);
     videoPlayer.startPlayback();
@@ -546,7 +574,7 @@ function clearMediaStartTimeout() {
 
 function scheduleMicrophoneStart() {
   clearMicrophoneStart();
-  if (!micCheck || !micCheck.checked) {
+  if (!micCheck || !micCheck.checked || !mayGoLive()) {
     return;
   }
 
@@ -723,6 +751,178 @@ function createWebcamControlChannel() {
     channel.onerror = onInterrupted;
     channel.onmessage = onMessage;
   }
+}
+
+/**
+ * Opens the channel Unity uses to tell a guest whether they are still waiting or have been let in.
+ * Guests only - a cast member has nothing to be told.
+ */
+function createGreenRoomChannel() {
+  if (!renderstreaming || !isGreenRoomGuest) {
+    return;
+  }
+
+  if (greenRoomChannel &&
+      (greenRoomChannel.readyState === 'open' || greenRoomChannel.readyState === 'connecting')) {
+    return;
+  }
+
+  const channel = renderstreaming.createDataChannel(GREEN_ROOM_CHANNEL_LABEL);
+  if (!channel) {
+    scheduleGreenRoomRecovery();
+    return;
+  }
+
+  greenRoomChannel = channel;
+  const onOpen = () => {
+    if (channel !== greenRoomChannel) {
+      return;
+    }
+    clearGreenRoomRecovery();
+  };
+  const onInterrupted = () => {
+    if (channel !== greenRoomChannel) {
+      return;
+    }
+    greenRoomChannel = null;
+    scheduleGreenRoomRecovery();
+  };
+  const onMessage = event => handleGreenRoomMessage(event.data);
+
+  if (channel.addEventListener) {
+    channel.addEventListener('open', onOpen);
+    channel.addEventListener('close', onInterrupted);
+    channel.addEventListener('error', onInterrupted);
+    channel.addEventListener('message', onMessage);
+  } else {
+    channel.onopen = onOpen;
+    channel.onclose = onInterrupted;
+    channel.onerror = onInterrupted;
+    channel.onmessage = onMessage;
+  }
+}
+
+function scheduleGreenRoomRecovery() {
+  if (!renderstreaming || isTearingDown || !isGreenRoomGuest || greenRoomRecoveryTimer != null) {
+    return;
+  }
+  greenRoomRecoveryTimer = setTimeout(() => {
+    greenRoomRecoveryTimer = null;
+    createGreenRoomChannel();
+  }, INPUT_CHANNEL_RECOVERY_DELAY_MS);
+}
+
+function clearGreenRoomRecovery() {
+  if (greenRoomRecoveryTimer != null) {
+    clearTimeout(greenRoomRecoveryTimer);
+    greenRoomRecoveryTimer = null;
+  }
+}
+
+function resetGreenRoomChannel() {
+  clearGreenRoomRecovery();
+  const channel = greenRoomChannel;
+  greenRoomChannel = null;
+  if (channel && channel.readyState !== 'closed') {
+    channel.close();
+  }
+}
+
+function handleGreenRoomMessage(raw) {
+  if (typeof raw !== 'string') {
+    return;
+  }
+
+  let message;
+  try {
+    message = JSON.parse(raw);
+  } catch {
+    return;
+  }
+
+  if (message.type === 'state') {
+    void applyGreenRoomAdmission(message.admitted === true);
+  }
+}
+
+/**
+ * Moves the page between waiting and being on air. Everything the guest sends is downstream of this
+ * one flag, so admission opens the microphone and camera in the same breath as it changes the words
+ * on the banner.
+ */
+async function applyGreenRoomAdmission(admitted) {
+  if (greenRoomAdmitted === admitted) {
+    updateGreenRoomBanner();
+    updateMicState();
+    return;
+  }
+
+  greenRoomAdmitted = admitted;
+  updateGreenRoomBanner();
+  updateMicState();
+  updateWebcamModeControls();
+
+  if (!admitted) {
+    return;
+  }
+
+  // Only now does anything of theirs reach the show. Both devices were left closed until this
+  // point, so this is the first getUserMedia call the page makes. The microphone goes through
+  // scheduleMicrophoneStart for its settle delay, in case a cast member is quick enough on the
+  // button to land the new transceiver inside the initial negotiation.
+  scheduleMicrophoneStart();
+  if (webcamCheck && webcamCheck.checked) {
+    await startWebcam();
+  }
+}
+
+function updateGreenRoomBanner() {
+  if (!greenRoomBanner) {
+    return;
+  }
+
+  if (greenRoomBannerTimer != null) {
+    clearTimeout(greenRoomBannerTimer);
+    greenRoomBannerTimer = null;
+  }
+
+  const connected = document.body.dataset.state === 'connected';
+  if (!isGreenRoomGuest || !connected) {
+    greenRoomBanner.hidden = true;
+    return;
+  }
+
+  greenRoomBanner.hidden = false;
+  greenRoomBanner.classList.toggle('is-admitted', greenRoomAdmitted);
+
+  if (!greenRoomAdmitted) {
+    if (greenRoomTitle) {
+      greenRoomTitle.textContent = 'You are in the green room';
+    }
+    if (greenRoomDetail) {
+      greenRoomDetail.textContent =
+        'You can see and hear the show, but nobody can see or hear you: your microphone is off and '
+        + 'your camera is not being sent. A cast member will bring you in.';
+    }
+    return;
+  }
+
+  if (greenRoomTitle) {
+    greenRoomTitle.textContent = 'You are in';
+  }
+  if (greenRoomDetail) {
+    const micWanted = !!(micCheck && micCheck.checked);
+    const camWanted = !!(webcamCheck && webcamCheck.checked);
+    const live = [micWanted ? 'microphone' : null, camWanted ? 'camera' : null].filter(Boolean);
+    greenRoomDetail.textContent = live.length
+      ? `Your ${live.join(' and ')} ${live.length > 1 ? 'are' : 'is'} now live.`
+      : 'Your microphone is still off - turn it on when you are ready.';
+  }
+
+  greenRoomBannerTimer = setTimeout(() => {
+    greenRoomBannerTimer = null;
+    greenRoomBanner.hidden = true;
+  }, GREEN_ROOM_ADMITTED_BANNER_MS);
 }
 
 function scheduleWebcamControlRecovery() {
@@ -1047,7 +1247,9 @@ async function startMicrophone() {
 }
 
 async function ensureMicrophoneTrackAttached() {
-  if (!renderstreaming || !localAudioTrack) {
+  // The last gate before anything of the guest's reaches the wire. Every caller checks first; this
+  // is here so that no future one has to be trusted to.
+  if (!renderstreaming || !localAudioTrack || !mayGoLive()) {
     return;
   }
 
@@ -1087,11 +1289,71 @@ function stopMicrophone() {
 }
 
 function updateMicState() {
+  const wanted = !!(micCheck && micCheck.checked);
+  const live = wanted && mayGoLive();
+
   if (micStateLabel && micCheck) {
-    micStateLabel.textContent = micCheck.checked ? 'Enabled' : 'Disabled';
+    micStateLabel.textContent = wanted
+      ? (live ? 'Enabled' : 'Enabled once you are brought in')
+      : 'Disabled';
   }
   if (audioSelect) {
-    audioSelect.disabled = !micCheck.checked;
+    audioSelect.disabled = !wanted;
+  }
+
+  if (micToggleButton) {
+    // Muted is the loud state: a guest needs to be able to tell at a glance that the room cannot
+    // hear them, and waiting in the green room is a kind of muted they did not choose - so it reads
+    // as muted, in its own colour.
+    micToggleButton.classList.toggle('is-muted', !live);
+    micToggleButton.classList.toggle('is-held', wanted && !live);
+    micToggleButton.setAttribute('aria-pressed', (!live).toString());
+
+    // Still live while a guest waits: what it sets then is what happens the moment they are let in.
+    const label = mayGoLive()
+      ? (live ? 'Mute microphone' : 'Unmute microphone')
+      : (wanted
+        ? 'Your microphone will go live when a cast member brings you in - click to arrive muted'
+        : 'You will arrive muted - click to go live when a cast member brings you in');
+    micToggleButton.setAttribute('aria-label', label);
+    micToggleButton.title = label;
+  }
+}
+
+/**
+ * Whether this page may put a microphone on the wire at all. False for the whole of a guest's stay
+ * in the green room - not a mute, but a microphone that was never opened.
+ */
+function mayGoLive() {
+  return !isGreenRoomGuest || greenRoomAdmitted;
+}
+
+/**
+ * The one way the microphone changes, for both the settings toggle and the quick button in the
+ * connected toolbar. They are two views of a single piece of state, so neither may set it alone.
+ */
+async function setMicEnabled(enabled) {
+  if (!micCheck) {
+    return;
+  }
+
+  micCheck.checked = enabled;
+  updateMicState();
+
+  if (!mayGoLive()) {
+    return;
+  }
+
+  if (enabled) {
+    await startMicrophone();
+    return;
+  }
+
+  if (localAudioTrack) {
+    localAudioTrack.enabled = false;
+    if (rnnoiseProcessor) {
+      rnnoiseProcessor.setEnabled(false);
+    }
   }
 }
 
@@ -1235,7 +1497,9 @@ async function configureWebcamSender(sender) {
 }
 
 async function ensureWebcamTrackAttached() {
-  if (!renderstreaming || !localVideoTrack) {
+  // A waiting guest may still open their camera to check themselves - the preview is local. What
+  // they may not do is send it: their face would land on the set's TV mid-scene.
+  if (!renderstreaming || !localVideoTrack || !mayGoLive()) {
     return;
   }
 
@@ -1271,15 +1535,13 @@ function stopWebcam() {
 
 if (micCheck) {
   micCheck.addEventListener('change', async () => {
-    updateMicState();
-    if (micCheck.checked) {
-      await startMicrophone();
-    } else if (localAudioTrack) {
-      localAudioTrack.enabled = false;
-      if (rnnoiseProcessor) {
-        rnnoiseProcessor.setEnabled(false);
-      }
-    }
+    await setMicEnabled(micCheck.checked);
+  });
+}
+
+if (micToggleButton) {
+  micToggleButton.addEventListener('click', async () => {
+    await setMicEnabled(!(micCheck && micCheck.checked));
   });
 }
 
@@ -1348,6 +1610,7 @@ async function setupAdmission() {
     }
   } else if (params.has('guest')) {
     admissionKind = 'guest';
+    isGreenRoomGuest = true;
     admissionKey = params.get('guest') || '';
     usernameInput.readOnly = true;
     joinButton.textContent = 'Enter Green Room';
@@ -1359,7 +1622,10 @@ async function setupAdmission() {
       admissionIdentity = result.identity;
       usernameInput.value = sanitizeUsername(result.identity.username);
       joinButton.disabled = false;
-      setStatusMessage('Check your microphone or webcam, then enter the green room.');
+      setStatusMessage(
+        'Check your microphone or webcam, then enter the green room. '
+        + 'You will be able to see and hear the show while you wait, but your microphone stays off '
+        + 'until a cast member brings you in.');
     } catch (error) {
       disableAdmission(error);
     }
@@ -1380,18 +1646,6 @@ async function admissionFetch(path, init = {}) {
     throw new Error(payload.error || 'Access could not be verified.');
   }
   return payload;
-}
-
-async function waitForGuestApproval(pendingId) {
-  while (true) {
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    const result = await admissionFetch(`/admission/guest/${encodeURIComponent(pendingId)}`);
-    if (result.status === 'approved' && result.token) {
-      admissionIdentity = result.identity;
-      usernameInput.value = sanitizeUsername(result.identity.username);
-      return result.token;
-    }
-  }
 }
 
 function disableAdmission(error) {

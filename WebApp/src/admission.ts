@@ -34,16 +34,7 @@ type AdmissionSession = {
   expiresAt: number;
 };
 
-type PendingGuest = {
-  id: string;
-  identity: AdmissionIdentity;
-  requestedAt: number;
-  status: 'waiting' | 'approved';
-  sessionToken?: string;
-};
-
 const SessionLifetimeMs = 5 * 60 * 1000;
-const PendingLifetimeMs = 2 * 60 * 60 * 1000;
 
 function sanitizeUsername(value: unknown): string {
   return String(value ?? '').trim().toLowerCase().replace(/[^a-z]/g, '');
@@ -60,10 +51,19 @@ function randomToken(): string {
   return crypto.randomBytes(32).toString('base64url');
 }
 
+/**
+ * Issues the short-lived signaling sessions that both cast and guest links exchange their key for.
+ *
+ * Admission itself is no longer decided here. A guest used to wait on a pending record in this
+ * service and only receive a session once a cast member approved it, which meant the waiting list
+ * lived on the signaling host while the people on it existed nowhere. Guests now connect on
+ * entering the green room and wait inside the show, so Unity - the only process that knows who is
+ * actually connected - owns the waiting list and the admission decision. What survives here is the
+ * access boundary: a valid link, and only a valid link, buys a session.
+ */
 export class AdmissionService {
   private readonly configPath: string;
   private readonly sessions = new Map<string, AdmissionSession>();
-  private readonly pendingGuests = new Map<string, PendingGuest>();
 
   constructor(configPath = process.env.ACCESS_CONFIG || path.join(process.cwd(), 'access.local.json')) {
     this.configPath = configPath;
@@ -113,23 +113,11 @@ export class AdmissionService {
         return;
       }
 
-      this.cleanup();
-      const existing = Array.from(this.pendingGuests.values()).find(
-        pending => pending.identity.username === username && pending.status === 'waiting'
-      );
-      if (existing) {
-        res.json(this.publicPending(existing));
-        return;
-      }
-
-      const pending: PendingGuest = {
-        id: randomToken(),
-        identity: { username, profile: 'guest', kind: 'guest' },
-        requestedAt: Date.now(),
-        status: 'waiting',
-      };
-      this.pendingGuests.set(pending.id, pending);
-      res.json(this.publicPending(pending));
+      // A guest session connects them to the green room, not to the show. Unity puts every guest
+      // behind its own admission gate on arrival, so handing the session over here grants a seat in
+      // the waiting room rather than a place on air.
+      const identity: AdmissionIdentity = { username, profile: 'guest', kind: 'guest' };
+      res.json({ token: this.issueSession(identity), identity });
     });
 
     router.post('/guest/preview', (req, res) => {
@@ -149,48 +137,6 @@ export class AdmissionService {
       }
 
       res.json({ identity: { username, profile: 'guest', kind: 'guest' } });
-    });
-
-    router.get('/guest/:id', (req, res) => {
-      this.cleanup();
-      const pending = this.pendingGuests.get(req.params.id);
-      if (!pending) {
-        res.status(404).json({ error: 'This green-room request is no longer active.' });
-        return;
-      }
-      res.json(this.publicPending(pending));
-    });
-
-    return router;
-  }
-
-  public createPrivateRouter(): express.Router {
-    const router = express.Router();
-
-    router.get('/pending', (_req, res) => {
-      this.cleanup();
-      const waiting = Array.from(this.pendingGuests.values())
-        .filter(pending => pending.status === 'waiting')
-        .sort((left, right) => left.requestedAt - right.requestedAt)
-        .map(pending => ({
-          id: pending.id,
-          username: pending.identity.username,
-          requestedAt: new Date(pending.requestedAt).toISOString(),
-        }));
-      res.json({ waiting });
-    });
-
-    router.post('/pending/:id/approve', (req, res) => {
-      this.cleanup();
-      const pending = this.pendingGuests.get(req.params.id);
-      if (!pending || pending.status !== 'waiting') {
-        res.status(404).json({ error: 'This guest is no longer waiting.' });
-        return;
-      }
-
-      pending.status = 'approved';
-      pending.sessionToken = this.issueSession(pending.identity);
-      res.json({ approved: true, username: pending.identity.username });
     });
 
     return router;
@@ -214,15 +160,6 @@ export class AdmissionService {
     return token;
   }
 
-  private publicPending(pending: PendingGuest): object {
-    return {
-      id: pending.id,
-      status: pending.status,
-      identity: pending.identity,
-      token: pending.status === 'approved' ? pending.sessionToken : undefined,
-    };
-  }
-
   private loadConfig(): AccessConfig {
     try {
       const parsed = JSON.parse(fs.readFileSync(this.configPath, 'utf8')) as Partial<AccessConfig>;
@@ -241,11 +178,6 @@ export class AdmissionService {
     this.sessions.forEach((session, token) => {
       if (session.expiresAt <= now) {
         this.sessions.delete(token);
-      }
-    });
-    this.pendingGuests.forEach((pending, id) => {
-      if (pending.requestedAt + PendingLifetimeMs <= now) {
-        this.pendingGuests.delete(id);
       }
     });
   }

@@ -416,6 +416,74 @@ body[data-state="waiting"] .status {
   fill: currentColor;
 }
 
+/*
+ * The quick mic button. Muted has to be legible from the corner of the eye mid-show, so it is not a
+ * dimmer version of live - it is a different colour, a filled pill, and a struck-through icon.
+ */
+.mic-toggle .mic-icon--muted,
+.mic-toggle.is-muted .mic-icon--live {
+  display: none;
+}
+
+.mic-toggle.is-muted .mic-icon--muted {
+  display: block;
+}
+
+.mic-toggle.is-muted {
+  border-color: rgba(255, 96, 96, 0.85);
+  background: rgba(120, 22, 22, 0.75);
+  color: #ffdede;
+}
+
+.mic-toggle.is-muted:hover {
+  border-color: rgba(255, 138, 138, 1);
+}
+
+/* Held rather than chosen: the guest wants their mic on and the show has not let them in yet. */
+.mic-toggle.is-muted.is-held {
+  border-color: rgba(255, 209, 139, 0.75);
+  background: rgba(70, 50, 18, 0.75);
+  color: #ffd18b;
+}
+
+.green-room-banner {
+  pointer-events: auto;
+  position: absolute;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  width: min(460px, calc(100vw - 36px));
+  padding: 12px 16px;
+  border: 1px solid rgba(255, 209, 139, 0.4);
+  border-radius: 12px;
+  background: rgba(28, 22, 10, 0.92);
+  backdrop-filter: blur(10px);
+  z-index: 5;
+}
+
+.green-room-banner.is-admitted {
+  border-color: rgba(126, 224, 143, 0.5);
+  background: rgba(12, 30, 16, 0.92);
+}
+
+.green-room-title {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 5px;
+  color: #ffd18b;
+}
+
+.green-room-banner.is-admitted .green-room-title {
+  color: #b9f2c4;
+}
+
+.green-room-detail {
+  font-size: 12px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.82);
+}
+
 .input-settings-panel {
   pointer-events: auto;
   position: absolute;
@@ -523,6 +591,7 @@ body[data-state="waiting"] .status {
 #inputSettingsPanel[hidden],
 #statsPanel[hidden],
 #webcamModeControls[hidden],
+#greenRoomBanner[hidden],
 #disconnectButton[hidden] {
   display: none;
 }
@@ -558,5 +627,13 @@ body[data-state="waiting"] .status {
     left: 12px;
     right: 12px;
     max-width: none;
+  }
+
+  .green-room-banner {
+    left: 12px;
+    right: 12px;
+    bottom: 64px;
+    width: auto;
+    transform: none;
   }
 }

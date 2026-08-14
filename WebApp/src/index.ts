@@ -92,10 +92,10 @@ export class RenderStreaming {
         },
       });
 
+      // Loopback listener for Unity's own signaling. It carries no HTTP routes of its own - the
+      // green-room approval API used to live here, and moved into Unity with the waiting list.
       const hostPort = Number(process.env.HOST_PORT || 55056);
       const hostApp = express();
-      hostApp.use(express.json());
-      hostApp.use('/admission', admission.createPrivateRouter());
       this.hostServer = hostApp.listen(hostPort, '127.0.0.1', () => {
         console.log(`Unity host signaling on ws://127.0.0.1:${hostPort}`);
       });
