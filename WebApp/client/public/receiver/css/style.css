@@ -2,6 +2,25 @@ body {
   margin: 0px;
 }
 
+#enableSoundButton {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 100;
+  padding: 10px 16px;
+  border: 1px solid #fff;
+  border-radius: 6px;
+  background: #15181d;
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+
+#enableSoundButton[hidden] {
+  display: none;
+}
+
 #player {
   position: relative;
   width: 100%;

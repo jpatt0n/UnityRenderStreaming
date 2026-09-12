@@ -17,6 +17,8 @@ export class VideoPlayer {
     this.lockMouseCheck = null;
     this.videoElement = null;
     this.fullScreenButtonElement = null;
+    this.soundButtonElement = null;
+    this._playbackRequest = 0;
     this.inputRemoting = null;
     this.sender = null;
     this.inputObserver = null;
@@ -52,11 +54,24 @@ export class VideoPlayer {
     this.videoElement.tabIndex = 0;
     this.videoElement.playsInline = true;
     this.videoElement.autoplay = true;
-    this.videoElement.defaultMuted = true;
-    this.videoElement.muted = true;
+    // Join calls play() under user activation. Try sound first; only mute if
+    // the browser rejects playback, and make that fallback visible.
+    this.videoElement.defaultMuted = false;
+    this.videoElement.muted = false;
     this.videoElement.srcObject = new MediaStream();
     this.videoElement.addEventListener('loadedmetadata', this._onLoadedVideo.bind(this), true);
     this.playerElement.appendChild(this.videoElement);
+
+    this.soundButtonElement = document.createElement('button');
+    this.soundButtonElement.id = 'enableSoundButton';
+    this.soundButtonElement.type = 'button';
+    this.soundButtonElement.textContent = 'Enable sound';
+    this.soundButtonElement.hidden = true;
+    this.soundButtonElement.addEventListener('click', () => this._enableSound());
+    this.playerElement.appendChild(this.soundButtonElement);
+    for (const event of ['playing', 'pause', 'volumechange']) {
+      this.videoElement.addEventListener(event, () => this._updateSoundButton());
+    }
 
     // add fullscreen button
     this.fullScreenButtonElement = document.createElement('img');
@@ -97,21 +112,43 @@ export class VideoPlayer {
   }
 
   startPlayback() {
-    if (!this.videoElement) {
-      return;
+    const video = this.videoElement;
+    if (!video) {
+      return Promise.resolve();
     }
+    const request = ++this._playbackRequest;
+    return Promise.resolve(video.play()).then(() => {
+      if (this.videoElement === video && request === this._playbackRequest) {
+        this._updateSoundButton();
+      }
+    }).catch(error => {
+      if (this.videoElement !== video || request !== this._playbackRequest || error?.name === 'AbortError') {
+        return;
+      }
+      if (error?.name === 'NotAllowedError' && !video.muted) {
+        video.muted = true;
+        this._updateSoundButton();
+        return this.startPlayback();
+      }
+      this._updateSoundButton();
+      console.warn('Video playback did not start automatically.', error);
+    });
+  }
 
-    const playPromise = this.videoElement.play();
-    if (playPromise && typeof playPromise.catch === 'function') {
-      playPromise.catch(error => {
-        if (error && error.name !== 'AbortError') {
-          console.warn('Video playback did not start automatically.', error);
-        }
-      });
+  _enableSound() {
+    if (!this.videoElement) return;
+    this.videoElement.muted = false;
+    return this.startPlayback();
+  }
+
+  _updateSoundButton() {
+    if (this.soundButtonElement && this.videoElement) {
+      this.soundButtonElement.hidden = !this.videoElement.muted && !this.videoElement.paused;
     }
   }
 
   _onClickFullscreenButton() {
+    this._enableSound();
     const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
     if (!fullscreenElement) {
       if (this.playerElement.requestFullscreen) {
@@ -169,9 +206,8 @@ export class VideoPlayer {
   }
 
   _mouseClick() {
-    if (this.videoElement.muted) {
-      this.videoElement.muted = false;
-      this.startPlayback();
+    if (this.videoElement.muted || this.videoElement.paused) {
+      this._enableSound();
     }
 
     // Restores pointer lock when we unfocus the player and click on it again
@@ -334,6 +370,11 @@ export class VideoPlayer {
   }
 
   deletePlayer() {
+    this._playbackRequest++;
+    if (this.soundButtonElement) {
+      this.soundButtonElement.remove();
+      this.soundButtonElement = null;
+    }
     this._releaseCapturedInputs();
     this._unlockKeyboardMovementKeys();
     this._setInputSenderChannel(null);
