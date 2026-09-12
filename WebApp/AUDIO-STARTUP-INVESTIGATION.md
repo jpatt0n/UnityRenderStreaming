@@ -89,10 +89,18 @@ signaling server.
 
 ## Release boundary and laptop check
 
-The live cache purge exposes the previous audio fix. The new playback cleanup,
-diagnostics, and versioned asset build require deploying rs-portal/dist. Follow
-rs-portal/DEPLOYMENT.md: upload the complete receiver release before the new page,
-retain older releases, include .htaccess, and purge cached HTML on both hosts.
+The playback cleanup, diagnostics, and versioned assets were subsequently deployed
+by rs-portal commit `9807c67` through the existing GitHub FTPS workflow. Run
+`34724439927` completed successfully at 23:05 UTC. Both public hostnames were
+verified to serve `/rs/releases/48e3bb193ff6afd6`, the updated audio player and
+receiver entrypoint (HTTP 200), and HTML with `no-store, must-revalidate, no-cache`
+and Cloudflare status DYNAMIC. Changed unversioned resources and HTML on both
+hostnames were purged after deployment.
+
+For future releases, follow rs-portal/DEPLOYMENT.md. The updated GitHub workflow
+uploads the complete receiver release before the new page and retains earlier
+release directories. It also uploads .htaccess. Purge cached HTML on both hosts
+if an existing cache entry prevents the no-cache headers from reaching clients.
 Versioning the complete import tree prevents an updated entrypoint from importing
 an old cached player/worklet. A query on main.js alone would not do this.
 
