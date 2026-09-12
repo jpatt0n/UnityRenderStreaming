@@ -14,21 +14,21 @@ import { PointerCorrector } from "./pointercorrect.js";
 /**
  * The streamed application's quickcam keys, taken from the browser so they reach the game.
  *
- * F1-F4 are the primary form and are claimed on their own. Chrome puts help on F1 and find on F3,
+ * F1-F5 are the primary form and are claimed on their own. Chrome puts help on F1 and find on F3,
  * but neither is reserved, so cancelling the keydown is enough.
  */
-const APP_CLAIMED_KEYS = new Set(['F1', 'F2', 'F3', 'F4']);
+const APP_CLAIMED_KEYS = new Set(['F1', 'F2', 'F3', 'F4', 'F5']);
 
 /**
- * The fallback form: the same four as Ctrl + digit.
+ * The fallback form: the same five as Ctrl + digit.
  *
  * Chrome maps Ctrl+1..8 to "switch to tab N", but unlike Ctrl+T or Ctrl+W those are not reserved
  * either. Firefox and Safari do reserve theirs, so there the chord only lands while the player is
  * fullscreen and the Keyboard Lock API (see videoplayer.js) is holding these codes.
  */
 const APP_CLAIMED_MODIFIER_DIGITS = new Set([
-  'Digit1', 'Digit2', 'Digit3', 'Digit4',
-  'Numpad1', 'Numpad2', 'Numpad3', 'Numpad4'
+  'Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5',
+  'Numpad1', 'Numpad2', 'Numpad3', 'Numpad4', 'Numpad5'
 ]);
 
 export class Sender extends LocalInputManager {
@@ -42,7 +42,8 @@ export class Sender extends LocalInputManager {
     this._altAsControlFallback = false;
     this._mouseSensitivity = 1;
     this._handheldMirror = false;
-    this._handheldOwnedPointerLock = false;
+    this._applicationPointerLock = false;
+    this._cameraOwnedPointerLock = false;
     this._corrector = new PointerCorrector(
       this._elem.videoWidth,
       this._elem.videoHeight,
@@ -183,6 +184,9 @@ export class Sender extends LocalInputManager {
       event.preventDefault();
       event.stopPropagation();
     }
+    if ((event.type === 'mousedown' || event.type === 'click') && this._wantsCameraPointerLock()) {
+      this._captureCameraPointerLock();
+    }
     if (!this._loggedMouseEvent) {
       this._loggedMouseEvent = true;
     }
@@ -290,34 +294,62 @@ export class Sender extends LocalInputManager {
 
   _captureHandheldPointerLock() {
     this._handheldMirror = true;
+    this._captureCameraPointerLock();
+  }
+
+  /** Applies Unity's authoritative per-player crosshair/handheld cursor state. */
+  setApplicationPointerLock(active) {
+    this._applicationPointerLock = active === true;
+    if (this._wantsCameraPointerLock()) {
+      this._captureCameraPointerLock();
+    } else {
+      this._releaseCameraPointerLock();
+    }
+  }
+
+  _wantsCameraPointerLock() {
+    return this._handheldMirror || this._applicationPointerLock;
+  }
+
+  _captureCameraPointerLock() {
     if (document.pointerLockElement) {
-      // Someone else's lock (the fullscreen lock-mouse option) is already holding the cursor.
-      // Riding it rather than owning it means lowering the handheld will not tear it down.
-      this._handheldOwnedPointerLock = false;
+      // Riding someone else's lock means leaving it alone when the camera mode ends.
+      this._cameraOwnedPointerLock = document.pointerLockElement === this._elem &&
+        this._cameraOwnedPointerLock;
       return;
     }
     if (!this._elem.requestPointerLock) {
       return;
     }
-    this._handheldOwnedPointerLock = true;
+    this._cameraOwnedPointerLock = true;
     const request = this._elem.requestPointerLock();
     if (request && request.catch) {
-      request.catch(() => { this._handheldOwnedPointerLock = false; });
+      request.catch(() => { this._cameraOwnedPointerLock = false; });
     }
   }
 
   _releaseHandheldPointerLock() {
     this._handheldMirror = false;
-    if (this._handheldOwnedPointerLock &&
+    if (!this._wantsCameraPointerLock()) {
+      this._releaseCameraPointerLock();
+    }
+  }
+
+  _releaseCameraPointerLock() {
+    if (this._cameraOwnedPointerLock &&
         document.pointerLockElement === this._elem &&
         document.exitPointerLock) {
       document.exitPointerLock();
     }
-    this._handheldOwnedPointerLock = false;
+    this._cameraOwnedPointerLock = false;
   }
 
   _onPointerLockChange() {
-    if (!this._handheldMirror || document.pointerLockElement) {
+    if (document.pointerLockElement) {
+      return;
+    }
+    this._cameraOwnedPointerLock = false;
+    if (!this._handheldMirror) {
       return;
     }
     // The lock fell away without any exit key being seen: the browser swallows the Esc that ends a
@@ -325,7 +357,6 @@ export class Sender extends LocalInputManager {
     // handheld up, so the Esc it never received is forwarded by hand - one press lowers the
     // camera in both worlds.
     this._handheldMirror = false;
-    this._handheldOwnedPointerLock = false;
     this._sendKeyTap('Escape');
   }
 
@@ -453,6 +484,7 @@ export class Sender extends LocalInputManager {
 
   dispose() {
     this.releaseAllInputs();
+    this._applicationPointerLock = false;
     this._releaseHandheldPointerLock();
     document.removeEventListener('pointerlockchange', this._onPointerLockChangeHandler, false);
     this._elem.removeEventListener('resize', this._onResizeEventHandler, false);

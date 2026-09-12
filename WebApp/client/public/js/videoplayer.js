@@ -268,13 +268,13 @@ export class VideoPlayer {
       'KeyW', 'KeyA', 'KeyS', 'KeyD',
       'ControlLeft', 'ControlRight',
       'ShiftLeft', 'ShiftRight', 'Space',
-      // The application's quickcam keys: F1-F4, and the same four as Ctrl + digit. Cancelling the
+      // The application's quickcam keys: F1-F5, and the same five as Ctrl + digit. Cancelling the
       // keydown already handles Chrome, but locking them is what stops the browser acting on them
       // at all - the only thing that works in browsers which reserve tab switching.
       // Alt is deliberately not locked: capturing it in fullscreen would also swallow Alt+Tab.
-      'F1', 'F2', 'F3', 'F4',
-      'Digit1', 'Digit2', 'Digit3', 'Digit4',
-      'Numpad1', 'Numpad2', 'Numpad3', 'Numpad4'
+      'F1', 'F2', 'F3', 'F4', 'F5',
+      'Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5',
+      'Numpad1', 'Numpad2', 'Numpad3', 'Numpad4', 'Numpad5'
     ]);
     this._keyboardLockRequest.catch(() => { });
   }
@@ -419,6 +419,12 @@ export class VideoPlayer {
     this._setInputSenderChannel(channel);
     if (this.inputSenderChannel.readyState === 'open') {
       this._onOpenInputSenderChannel();
+    }
+  }
+
+  setApplicationPointerLock(active) {
+    if (this.sender) {
+      this.sender.setApplicationPointerLock(active);
     }
   }
 

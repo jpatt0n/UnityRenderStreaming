@@ -59,6 +59,7 @@ const micCheck = document.getElementById('micCheck');
 const audioSelect = document.querySelector('select#audioSource');
 const videoPlayer = new VideoPlayer();
 const INPUT_CHANNEL_LABEL = "input";
+const POINTER_LOCK_CONTROL_CHANNEL_LABEL = "pointer-lock-control";
 const WEBCAM_CONTROL_CHANNEL_LABEL = "webcam-control";
 const GREEN_ROOM_CHANNEL_LABEL = "green-room";
 const GREEN_ROOM_ADMITTED_BANNER_MS = 6000;
@@ -73,6 +74,8 @@ const MIN_MOUSE_SENSITIVITY = 0.1;
 const MAX_MOUSE_SENSITIVITY = 4;
 const DEFAULT_MOUSE_SENSITIVITY = 1;
 let inputChannel = null;
+let pointerLockControlChannel = null;
+let pointerLockControlRecoveryTimer = null;
 let webcamControlChannel = null;
 let webcamControlRecoveryTimer = null;
 let greenRoomChannel = null;
@@ -471,6 +474,7 @@ function onRemoteTrack(data) {
 
 async function onConnect() {
   createInputChannel();
+  createPointerLockControlChannel();
   createGreenRoomChannel();
   createWebcamControlChannel();
   if (webcamCheck && webcamCheck.checked && mayGoLive()) {
@@ -505,6 +509,7 @@ async function teardownConnection(message, showReady = true) {
   }
 
   resetInputChannelState();
+  resetPointerLockControlChannel();
   resetWebcamControlChannel();
   resetGreenRoomChannel();
   videoPlayer.deletePlayer();
@@ -612,6 +617,90 @@ function createInputChannel() {
   bindInputChannelLifecycle(channel);
   videoPlayer.setupInput(channel);
   armInputChannelOpenTimeout(channel);
+}
+
+function createPointerLockControlChannel() {
+  if (!renderstreaming) {
+    return;
+  }
+
+  if (pointerLockControlChannel &&
+      (pointerLockControlChannel.readyState === 'open' ||
+       pointerLockControlChannel.readyState === 'connecting')) {
+    return;
+  }
+
+  const channel = renderstreaming.createDataChannel(POINTER_LOCK_CONTROL_CHANNEL_LABEL);
+  if (!channel) {
+    schedulePointerLockControlRecovery();
+    return;
+  }
+
+  pointerLockControlChannel = channel;
+  const onOpen = () => clearPointerLockControlRecovery();
+  const onInterrupted = () => {
+    if (channel !== pointerLockControlChannel) {
+      return;
+    }
+    pointerLockControlChannel = null;
+    videoPlayer.setApplicationPointerLock(false);
+    schedulePointerLockControlRecovery();
+  };
+  const onMessage = event => handlePointerLockControlMessage(event.data);
+
+  if (channel.addEventListener) {
+    channel.addEventListener('open', onOpen);
+    channel.addEventListener('close', onInterrupted);
+    channel.addEventListener('error', onInterrupted);
+    channel.addEventListener('message', onMessage);
+  } else {
+    channel.onopen = onOpen;
+    channel.onclose = onInterrupted;
+    channel.onerror = onInterrupted;
+    channel.onmessage = onMessage;
+  }
+}
+
+function handlePointerLockControlMessage(raw) {
+  if (typeof raw !== 'string') {
+    return;
+  }
+
+  try {
+    const message = JSON.parse(raw);
+    if (message.type === 'state') {
+      videoPlayer.setApplicationPointerLock(message.active === true);
+    }
+  } catch {
+    // Ignore malformed state from an obsolete or mismatched Unity peer.
+  }
+}
+
+function schedulePointerLockControlRecovery() {
+  if (!renderstreaming || isTearingDown || pointerLockControlRecoveryTimer != null) {
+    return;
+  }
+  pointerLockControlRecoveryTimer = setTimeout(() => {
+    pointerLockControlRecoveryTimer = null;
+    createPointerLockControlChannel();
+  }, INPUT_CHANNEL_RECOVERY_DELAY_MS);
+}
+
+function clearPointerLockControlRecovery() {
+  if (pointerLockControlRecoveryTimer != null) {
+    clearTimeout(pointerLockControlRecoveryTimer);
+    pointerLockControlRecoveryTimer = null;
+  }
+}
+
+function resetPointerLockControlChannel() {
+  clearPointerLockControlRecovery();
+  const channel = pointerLockControlChannel;
+  pointerLockControlChannel = null;
+  videoPlayer.setApplicationPointerLock(false);
+  if (channel && channel.readyState !== 'closed') {
+    channel.close();
+  }
 }
 
 function bindInputChannelLifecycle(channel) {
