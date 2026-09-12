@@ -16,6 +16,7 @@ export class VideoPlayer {
     this.playerElement = null;
     this.lockMouseCheck = null;
     this.videoElement = null;
+    this.audioElement = null;
     this.fullScreenButtonElement = null;
     this.soundButtonElement = null;
     this._playbackRequest = 0;
@@ -54,13 +55,20 @@ export class VideoPlayer {
     this.videoElement.tabIndex = 0;
     this.videoElement.playsInline = true;
     this.videoElement.autoplay = true;
-    // Join calls play() under user activation. Try sound first; only mute if
-    // the browser rejects playback, and make that fallback visible.
-    this.videoElement.defaultMuted = false;
-    this.videoElement.muted = false;
+    // Video readiness must never gate the incoming show audio. In particular,
+    // a video MediaStream can wait for its first decoded frame indefinitely.
+    this.videoElement.defaultMuted = true;
+    this.videoElement.muted = true;
     this.videoElement.srcObject = new MediaStream();
     this.videoElement.addEventListener('loadedmetadata', this._onLoadedVideo.bind(this), true);
     this.playerElement.appendChild(this.videoElement);
+
+    this.audioElement = document.createElement('audio');
+    this.audioElement.id = 'Audio';
+    this.audioElement.autoplay = true;
+    this.audioElement.srcObject = new MediaStream();
+    this.audioElement.addEventListener('loadedmetadata', () => this._startAudioPlayback());
+    this.playerElement.appendChild(this.audioElement);
 
     this.soundButtonElement = document.createElement('button');
     this.soundButtonElement.id = 'enableSoundButton';
@@ -70,7 +78,7 @@ export class VideoPlayer {
     this.soundButtonElement.addEventListener('click', () => this._enableSound());
     this.playerElement.appendChild(this.soundButtonElement);
     for (const event of ['playing', 'pause', 'volumechange']) {
-      this.videoElement.addEventListener(event, () => this._updateSoundButton());
+      this.audioElement.addEventListener(event, () => this._updateSoundButton());
     }
 
     // add fullscreen button
@@ -104,7 +112,7 @@ export class VideoPlayer {
   }
 
   _onLoadedVideo() {
-    this.startPlayback();
+    this._startVideoPlayback();
     this.resizeVideo();
     if (this.sender && this.sender._onResizeEvent) {
       this.sender._onResizeEvent();
@@ -112,38 +120,54 @@ export class VideoPlayer {
   }
 
   startPlayback() {
+    // Both calls run synchronously under the Join gesture; neither awaits the
+    // other stream, signaling, device permission, or the first video frame.
+    return Promise.all([this._startVideoPlayback(), this._startAudioPlayback()]);
+  }
+
+  _startVideoPlayback() {
     const video = this.videoElement;
-    if (!video) {
-      return Promise.resolve();
-    }
+    if (!video) return Promise.resolve();
+    return video.play().catch(error => {
+      if (this.videoElement === video && error?.name !== 'AbortError') {
+        console.warn('Video playback did not start.', error);
+      }
+    });
+  }
+
+  _startAudioPlayback() {
+    const audio = this.audioElement;
+    if (!audio || audio.muted) return Promise.resolve();
     const request = ++this._playbackRequest;
-    return Promise.resolve(video.play()).then(() => {
-      if (this.videoElement === video && request === this._playbackRequest) {
+    return audio.play().then(() => {
+      if (this.audioElement === audio && request === this._playbackRequest) {
         this._updateSoundButton();
       }
     }).catch(error => {
-      if (this.videoElement !== video || request !== this._playbackRequest || error?.name === 'AbortError') {
+      if (this.audioElement !== audio || request !== this._playbackRequest || error?.name === 'AbortError') {
         return;
       }
-      if (error?.name === 'NotAllowedError' && !video.muted) {
-        video.muted = true;
-        this._updateSoundButton();
-        return this.startPlayback();
+      if (error?.name === 'NotAllowedError') {
+        // An explicit gesture is required. Keep the video playing and expose
+        // the existing sound action instead of silently retrying muted audio.
+        audio.muted = true;
+      } else {
+        console.warn('Audio playback did not start.', error);
       }
       this._updateSoundButton();
-      console.warn('Video playback did not start automatically.', error);
     });
   }
 
   _enableSound() {
-    if (!this.videoElement) return;
-    this.videoElement.muted = false;
+    if (!this.audioElement) return;
+    this.audioElement.muted = false;
     return this.startPlayback();
   }
 
   _updateSoundButton() {
-    if (this.soundButtonElement && this.videoElement) {
-      this.soundButtonElement.hidden = !this.videoElement.muted && !this.videoElement.paused;
+    if (this.soundButtonElement && this.audioElement) {
+      const hasAudio = this.audioElement.srcObject?.getAudioTracks().length > 0;
+      this.soundButtonElement.hidden = !hasAudio || (!this.audioElement.muted && !this.audioElement.paused);
     }
   }
 
@@ -206,7 +230,7 @@ export class VideoPlayer {
   }
 
   _mouseClick() {
-    if (this.videoElement.muted || this.videoElement.paused) {
+    if (this.audioElement.muted || this.audioElement.paused || this.videoElement.paused) {
       this._enableSound();
     }
 
@@ -326,11 +350,21 @@ export class VideoPlayer {
    * @param {MediaStreamTrack} track 
    */
   addTrack(track) {
-    if (!this.videoElement.srcObject) {
-      return;
+    const element = track.kind === 'audio' ? this.audioElement : this.videoElement;
+    if (!element?.srcObject) return;
+    const stream = element.srcObject;
+    if (stream.getTracks().includes(track)) return;
+    // Renegotiation/replacement must not leave an old, silent first audio track
+    // selected by the media element. The peer owns the tracks; do not stop them.
+    // Assign a populated stream so the audio element actually loads its source.
+    // Mutating the initially empty stream can leave <audio> at HAVE_NOTHING.
+    element.srcObject = new MediaStream([track]);
+    if (track.kind === 'audio') {
+      this._updateSoundButton();
+      this._startAudioPlayback();
+    } else {
+      this._startVideoPlayback();
     }
-
-    this.videoElement.srcObject.addTrack(track);
   }
 
   resizeVideo() {
@@ -371,6 +405,15 @@ export class VideoPlayer {
 
   deletePlayer() {
     this._playbackRequest++;
+    for (const element of [this.audioElement, this.videoElement]) {
+      if (!element) continue;
+      element.pause();
+      element.srcObject = null;
+    }
+    if (this.audioElement) {
+      this.audioElement.remove();
+      this.audioElement = null;
+    }
     if (this.soundButtonElement) {
       this.soundButtonElement.remove();
       this.soundButtonElement = null;

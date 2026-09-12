@@ -1,0 +1,91 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Audio playback regression</title>
+<h1>Audio playback regression</h1>
+<p>Runs native Chromium media elements with a quiet generated tone and a delayed video frame. No Unity host or microphone permission is needed.</p>
+<button id="run">Run tests</button>
+<pre id="result">Ready</pre>
+<div id="player" style="position:relative;width:640px;height:360px"></div>
+<script type="module">
+  import { VideoPlayer } from '/js/videoplayer.js';
+  const run = document.getElementById('run');
+  const output = document.getElementById('result');
+  function assert(condition, message) { if (!condition) throw new Error(message); }
+  async function until(condition) {
+    const deadline = performance.now() + 3000;
+    while (!condition()) {
+      if (performance.now() > deadline) throw new Error('Timed out waiting for native media playback');
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+  }
+  run.onclick = async () => {
+    run.disabled = true;
+    output.textContent = '';
+    const pass = text => { output.textContent += 'PASS: ' + text + '\n'; };
+    const player = new VideoPlayer();
+    const context = new AudioContext();
+    const tracks = [];
+    let writer;
+    try {
+      assert(typeof MediaStreamTrackGenerator === 'function', 'Use Chromium with MediaStreamTrackGenerator support');
+      const resume = context.resume();
+      player.createPlayer(document.getElementById('player'), { checked: false });
+      void player.startPlayback(); // Run under the click gesture, before tracks exist.
+      await resume;
+      const makeAudio = frequency => {
+        const oscillator = context.createOscillator();
+        oscillator.frequency.value = frequency;
+        const gain = context.createGain();
+        gain.gain.value = 0.001;
+        const destination = context.createMediaStreamDestination();
+        oscillator.connect(gain).connect(destination);
+        oscillator.start();
+        const track = destination.stream.getAudioTracks()[0];
+        tracks.push(track);
+        return track;
+      };
+      const video = new MediaStreamTrackGenerator({ kind: 'video' });
+      tracks.push(video);
+      writer = video.writable.getWriter();
+      player.addTrack(video);
+      player.addTrack(makeAudio(220));
+      await until(() => player.audioElement.readyState >= 2 && player.audioElement.currentTime > 0);
+      assert(!player.audioElement.muted && !player.audioElement.paused, 'Audio must be playing');
+      assert(player.videoElement.readyState === 0, 'Video must still be waiting for its first frame');
+      pass('Audio loads and plays from an initially empty player while video has no frames');
+
+      const canvas = document.createElement('canvas');
+      canvas.width = 640; canvas.height = 360;
+      canvas.getContext('2d').fillRect(0, 0, 640, 360);
+      const frame = new VideoFrame(canvas, { timestamp: 0 });
+      await writer.write(frame); frame.close();
+      await until(() => player.videoElement.readyState >= 2);
+      assert(player.videoElement.srcObject.getAudioTracks().length === 0, 'Video must not duplicate audio playback');
+      pass('Late video starts independently without duplicating audio');
+
+      const replacement = makeAudio(330);
+      player.addTrack(replacement);
+      player.addTrack(replacement);
+      await until(() => player.audioElement.readyState >= 2 && !player.audioElement.paused);
+      assert(player.audioElement.srcObject.getTracks().length === 1 && player.audioElement.srcObject.getTracks()[0] === replacement,
+        'Only the replacement audio track should be selected');
+      pass('Audio replacement selects one track and resumes native playback');
+
+      const audioElement = player.audioElement;
+      const videoElement = player.videoElement;
+      player.deletePlayer();
+      assert(audioElement.srcObject === null && videoElement.srcObject === null && audioElement.paused && videoElement.paused,
+        'Disconnect must release both playback streams');
+      pass('Disconnect releases audio and video');
+      output.textContent += '4/4 passed\n';
+    } catch (error) {
+      output.textContent += 'FAIL: ' + error.message + '\n';
+    } finally {
+      if (player.videoElement) player.deletePlayer();
+      if (writer) await writer.close().catch(() => {});
+      tracks.forEach(track => track.stop());
+      await context.close();
+      run.disabled = false;
+    }
+  };
+</script>

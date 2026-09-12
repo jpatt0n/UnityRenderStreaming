@@ -1752,16 +1752,17 @@ let intervalId;
 
 function showStatsMessage() {
   intervalId = setInterval(async () => {
-    if (renderstreaming == null) {
+    const session = renderstreaming;
+    if (session == null) {
       return;
     }
 
-    const stats = await renderstreaming.getStats();
-    if (stats == null) {
+    const stats = await session.getStats();
+    if (session !== renderstreaming || stats == null) {
       return;
     }
 
-    const array = createDisplayStringArray(stats, lastStats);
+    const array = createDisplayStringArray(stats, lastStats, videoPlayer.audioElement);
     if (array.length && statsDiv) {
       statsDiv.innerHTML = array.join('<br>');
     }
